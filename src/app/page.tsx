@@ -1,102 +1,163 @@
-import Image from "next/image";
+import { Logo } from "@/components/ui/Logo";
+import { StartButton } from "@/components/StartButton";
 
-export default function Home() {
+const ANSWERS = [
+  { title: "Скільки це приблизно коштує", text: "Ринковий діапазон у вашому місті або регіоні — від нижньої до верхньої межі, з типовою ціною." },
+  { title: "Що входить у ціну", text: "Повний кошик лікування: імплант, компоненти, сканування та постійна коронка або конструкція." },
+  { title: "Що може оплачуватися окремо", text: "Видалення, кісткова пластика, синус-ліфтинг, седація — окремо й лише якщо їх підтвердить лікар." },
+  { title: "Чим відрізняються сегменти", text: "Базовий, Оптимальний і Преміальний — це різні системи імплантів і матеріали, а не «погано» чи «добре»." },
+  { title: "Що робити далі", text: "Один зрозумілий наступний крок: перевірити план, розібрати КТ, отримати консультацію чи пропозиції клінік." },
+];
+
+const STEPS = [
+  { n: "1", title: "Місто", text: "Ціни на імплантацію помітно відрізняються між містами та регіонами." },
+  { n: "2", title: "Ваша ситуація", text: "Кілька простих запитань без медичних термінів — зазвичай 3–5." },
+  { n: "3", title: "Результат", text: "Діапазон вартості, склад лікування та можливі доплати — одразу на екрані." },
+];
+
+const FAQ = [
+  {
+    q: "Чи потрібно залишати телефон, щоб побачити ціну?",
+    a: "Ні. Основний розрахунок показується одразу, без реєстрації та номера телефону.",
+  },
+  {
+    q: "Чому діапазон, а не одна ціна?",
+    a: "Вартість залежить від клініки, системи імплантів, матеріалу коронки та вашої клінічної ситуації. Ми показуємо, скільки зазвичай коштує співставне лікування на ринку.",
+  },
+  {
+    q: "Чи замінює калькулятор консультацію лікаря?",
+    a: "Ні. Калькулятор не ставить діагноз і не призначає лікування. Він допомагає зорієнтуватися у вартості й підготуватися до розмови з лікарем.",
+  },
+  {
+    q: "Мені вже назвали ціну. Чи можна її перевірити?",
+    a: "Так. Після розрахунку введіть суму та що в неї входить — ми порівняємо її з ринковим діапазоном для співставного лікування.",
+  },
+];
+
+export default function LandingPage() {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="min-h-dvh bg-paper">
+      <header className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4 sm:px-6">
+        <Logo />
+        <span className="hidden text-sm font-semibold text-muted sm:inline">
+          Фінансовий навігатор імплантації
+        </span>
+      </header>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
+      <main>
+        <section className="bg-canvas">
+          <div className="mx-auto grid max-w-5xl gap-10 px-4 py-12 sm:px-6 sm:py-20 md:grid-cols-[1.25fr_1fr] md:items-center">
+            <div>
+              <p className="mb-4 inline-flex rounded-full bg-brand-soft px-3 py-1 text-sm font-bold text-brand">
+                Безкоштовно · без телефону · 2 хвилини
+              </p>
+              <h1 className="text-[34px] leading-[1.1] font-extrabold tracking-tight text-balance sm:text-[48px]">
+                Скільки коштує імплантація зубів у вашому місті?
+              </h1>
+              <p className="mt-5 max-w-xl text-[17px] leading-relaxed text-ink-soft">
+                Калькулятор Denva показує орієнтовний ринковий діапазон вартості повного лікування —
+                а не рекламну ціну «імплант від…». Ви побачите, що входить у ціну, що може
+                оплачуватися окремо, і що робити далі.
+              </p>
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <StartButton placement="hero" />
+                <span className="text-sm text-muted">Результат одразу, без реєстрації</span>
+              </div>
+            </div>
+
+            <div
+              aria-hidden
+              className="rounded-[var(--radius-card)] border border-line bg-paper p-5 shadow-[0_20px_50px_-30px_rgba(16,24,40,0.35)]"
+            >
+              <p className="text-xs font-bold tracking-wide text-muted uppercase">Приклад результату</p>
+              <p className="mt-1 text-[15px] font-extrabold">Один зуб · Львів</p>
+              <div className="mt-4 space-y-2.5">
+                {[
+                  ["Базовий", "22 000–30 600 грн", "w-[40%]"],
+                  ["Оптимальний", "31 300–43 400 грн", "w-[58%]"],
+                  ["Преміальний", "46 500–64 600 грн", "w-[86%]"],
+                ].map(([label, range, width]) => (
+                  <div key={label} className="rounded-xl border border-line p-3">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-sm font-bold">{label}</span>
+                      <span className="tabular text-sm font-extrabold">{range}</span>
+                    </div>
+                    <div className="mt-2 h-1.5 rounded-full bg-canvas">
+                      <div className={`h-1.5 rounded-full bg-brand ${width}`} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-xs leading-relaxed text-muted">
+                Імплант, компоненти, сканування і постійна коронка — у сумі. Видалення та кісткова
+                пластика — окремо, лише за потреби.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-5xl px-4 py-14 sm:px-6">
+          <h2 className="text-[26px] font-extrabold tracking-tight sm:text-[30px]">
+            П’ять відповідей за один розрахунок
+          </h2>
+          <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {ANSWERS.map((item, index) => (
+              <li key={item.title} className="rounded-[var(--radius-card)] border border-line p-5">
+                <span className="tabular text-sm font-extrabold text-brand">0{index + 1}</span>
+                <h3 className="mt-2 text-[17px] font-extrabold">{item.title}?</h3>
+                <p className="mt-2 text-[15px] leading-relaxed text-ink-soft">{item.text}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="bg-canvas">
+          <div className="mx-auto max-w-5xl px-4 py-14 sm:px-6">
+            <h2 className="text-[26px] font-extrabold tracking-tight sm:text-[30px]">Як це працює</h2>
+            <ol className="mt-8 grid gap-4 md:grid-cols-3">
+              {STEPS.map((step) => (
+                <li key={step.n} className="rounded-[var(--radius-card)] bg-paper p-5">
+                  <span className="grid size-9 place-items-center rounded-full bg-brand text-[15px] font-extrabold text-white">
+                    {step.n}
+                  </span>
+                  <h3 className="mt-4 text-[17px] font-extrabold">{step.title}</h3>
+                  <p className="mt-2 text-[15px] leading-relaxed text-ink-soft">{step.text}</p>
+                </li>
+              ))}
+            </ol>
+            <div className="mt-8">
+              <StartButton placement="how_it_works" />
+            </div>
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-3xl px-4 py-14 sm:px-6">
+          <h2 className="text-[26px] font-extrabold tracking-tight sm:text-[30px]">Часті запитання</h2>
+          <div className="mt-6 divide-y divide-line border-y border-line">
+            {FAQ.map((item) => (
+              <details key={item.q} className="group py-4">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-[16px] font-bold">
+                  {item.q}
+                  <span aria-hidden className="text-xl text-muted transition-transform group-open:rotate-45">
+                    +
+                  </span>
+                </summary>
+                <p className="mt-3 text-[15px] leading-relaxed text-ink-soft">{item.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
+
+      <footer className="border-t border-line bg-canvas">
+        <div className="mx-auto max-w-5xl px-4 py-8 text-sm leading-relaxed text-muted sm:px-6">
+          <Logo />
+          <p className="mt-4 max-w-3xl">
+            Калькулятор показує орієнтовні ринкові діапазони і не є медичною консультацією, діагнозом
+            чи планом лікування. Остаточний обсяг і вартість лікування визначає лікар після огляду
+            та діагностики.
+          </p>
+        </div>
       </footer>
     </div>
   );
