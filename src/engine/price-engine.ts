@@ -12,6 +12,7 @@ import { GEO_LEVEL_RANK, geoChain } from "./geo";
 import { isAlignedPackage } from "./segments";
 import { MARKET_DATA } from "./market-data";
 import type {
+  BasketCode,
   BasketModifiers,
   GeoScope,
   MarketConfidence,
@@ -122,6 +123,26 @@ function broaderScope(a: GeoScope, b: GeoScope): GeoScope {
   return GEO_LEVEL_RANK[b.level] > GEO_LEVEL_RANK[a.level] ? b : a;
 }
 
+/**
+ * Scales the composed breakdown so it sums exactly to a basket-level record
+ * — the "Деталізація" table must never disagree with the total shown.
+ * Rounding leftovers go to the largest line.
+ */
+function scaleLinesTo(lines: PricedLine[], target: PriceRange): Map<PricedLine, PricedLine> {
+  const keys: (keyof PriceRange)[] = ["p25", "median", "p75"];
+  const scaled = lines.map((l) => ({ ...l, range: { ...l.range } }));
+  for (const key of keys) {
+    const composed = lines.reduce((acc, l) => acc + l.range[key], 0);
+    if (composed <= 0 || scaled.length === 0) continue;
+    const factor = target[key] / composed;
+    scaled.forEach((l, i) => (l.range[key] = Math.round((lines[i].range[key] * factor) / 100) * 100));
+    const diff = target[key] - scaled.reduce((acc, l) => acc + l.range[key], 0);
+    const largest = scaled.reduce((best, l) => (l.range[key] > best.range[key] ? l : best), scaled[0]);
+    largest.range[key] += diff;
+  }
+  return new Map(lines.map((l, i) => [l, scaled[i]]));
+}
+
 function sameModifiers(a: BasketModifiers, b: BasketModifiers): boolean {
   return (
     a.implants === b.implants &&
@@ -168,7 +189,7 @@ export function priceScenario(
 ): PricedScenario {
   const multiPart = scenario.parts.length > 1;
   const seenPerTreatment = new Set<string>();
-  const lines: PricedLine[] = [];
+  let lines: PricedLine[] = [];
   const resolved: ResolvedRecord[] = [];
   let isFullArch = false;
 
@@ -222,12 +243,19 @@ export function priceScenario(
   let market = buildMeta(resolved);
   let source: PricedScenario["source"] = "composed";
 
-  // Basket-level record takes precedence for the unmodified reference scenario.
-  if (scenario.parts.length === 1 && isAlignedPackage(pkg)) {
+  // Basket-level record takes precedence for the unmodified reference
+  // scenario. SINGLE_TOOTH_TEMP is calibrated by the STANDARD record plus its
+  // own temp-crown line, so toggling the temp crown adds exactly that line.
+  // Full-arch records are never used as a single total because they carry no
+  // per-stage values (ТЗ §12 requires stage 1 + stage 2 = full).
+  if (scenario.parts.length === 1 && isAlignedPackage(pkg) && !isFullArch) {
     const part = scenario.parts[0];
-    const def = BASKETS[part.basket];
-    if (sameModifiers(part.modifiers, def.defaultModifiers)) {
-      const basketRes = lookupPrice(part.basket, pkg.implant, locationId, opts);
+    const isTemp = part.basket === "SINGLE_TOOTH_TEMP";
+    const calibration: BasketCode = isTemp ? "SINGLE_TOOTH_STANDARD" : part.basket;
+    const expected = BASKETS[calibration].defaultModifiers;
+    const modifiers = isTemp ? { ...part.modifiers, tempCrowns: 0 } : part.modifiers;
+    if (sameModifiers(modifiers, expected)) {
+      const basketRes = lookupPrice(calibration, pkg.implant, locationId, opts);
       if (basketRes) {
         const broadestLine = resolved.reduce(
           (acc, r) => broaderScope(acc, r.scope),
@@ -237,12 +265,20 @@ export function priceScenario(
           GEO_LEVEL_RANK[basketRes.scope.level] <=
           GEO_LEVEL_RANK[broadestLine.level]
         ) {
-          total = roundRange({
+          const record = roundRange({
             p25: basketRes.record.p25,
             median: basketRes.record.median,
             p75: basketRes.record.p75,
           });
-          market = buildMeta([basketRes]);
+          const calibrated = lines.filter((l) => l.code !== "TEMP_CROWN_PACKAGE");
+          const scaled = scaleLinesTo(calibrated, record);
+          lines = lines.map((l) => scaled.get(l) ?? l);
+          total = sum(lines);
+          market = buildMeta(
+            isTemp
+              ? [basketRes, ...resolved.filter((_, i) => lines[i]?.code === "TEMP_CROWN_PACKAGE")]
+              : [basketRes],
+          );
           source = "basket_record";
         }
       }
@@ -311,9 +347,17 @@ export function scenarioIncluded(scenario: Scenario): string[] {
     parts.length > 1 && new Set(parts.map((p) => p.basket)).size > 1;
   const out: string[] = [];
   const seen = new Set<string>();
+  if (parts.length > 1 && !differ) {
+    out.push("Розрахунок для обох щелеп: склад нижче — для кожної щелепи окремо, спільна діагностика — один раз");
+  }
   for (const part of parts) {
     const prefix = differ && part.arch ? `${ARCH_PREFIX[part.arch]}: ` : "";
-    for (const bullet of BASKETS[part.basket].included) {
+    // A multi-tooth basket where every implant already exists is only the
+    // prosthetic stage — describe it like IMPLANT_ALREADY_PLACED.
+    const def = BASKETS[part.basket];
+    const prostheticOnly = !def.isFullArch && part.modifiers.implants === 0;
+    const bullets = prostheticOnly ? BASKETS.IMPLANT_ALREADY_PLACED.included : def.included;
+    for (const bullet of bullets) {
       const text = prefix + bullet;
       if (!seen.has(text)) {
         seen.add(text);

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { Cta, ServiceTarget } from "@/engine/types";
-import { isValidPhone, submitLead, type ContactChannel, type LeadPayload } from "@/services/lead";
+import { isLeadStubMode, isValidPhone, submitLead, type ContactChannel, type LeadPayload } from "@/services/lead";
 import { Button } from "@/components/ui/Button";
 
 const SERVICE_INFO: Record<ServiceTarget, { name: string; text: string }> = {
@@ -56,7 +56,12 @@ export function LeadDialog({ cta, open, onClose, buildPayload }: Props) {
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      // Each opening is a fresh request (the CTA may have changed since).
+      setStatus("idle");
+      setTouched(false);
+      dialog.showModal();
+    }
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
@@ -106,14 +111,24 @@ export function LeadDialog({ cta, open, onClose, buildPayload }: Props) {
 
         {status === "sent" ? (
           <div className="mt-5" role="status">
-            <div className="rounded-2xl bg-good-soft p-4">
-              <p className="font-extrabold text-good">Дякуємо! Заявку отримано.</p>
-              <p className="mt-1 text-[15px] text-ink-soft">
-                Ми зв’яжемося з вами протягом робочого дня
-                {channel === "call" ? " дзвінком" : ` у ${channel === "viber" ? "Viber" : "Telegram"}`}.
-                Ваш розрахунок уже додано до заявки — нічого не потрібно пояснювати заново.
-              </p>
-            </div>
+            {isLeadStubMode() ? (
+              <div className="rounded-2xl bg-warn-soft p-4">
+                <p className="font-extrabold text-warn">Демо-режим: заявку не надіслано</p>
+                <p className="mt-1 text-[15px] text-ink-soft">
+                  Форма працює, але підключення до CRM ще не налаштоване, тому заявка нікуди не
+                  передається і з вами ніхто не зв’яжеться.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-2xl bg-good-soft p-4">
+                <p className="font-extrabold text-good">Дякуємо! Заявку отримано.</p>
+                <p className="mt-1 text-[15px] text-ink-soft">
+                  Ми зв’яжемося з вами протягом робочого дня
+                  {channel === "call" ? " дзвінком" : ` у ${channel === "viber" ? "Viber" : "Telegram"}`}.
+                  Ваш розрахунок уже додано до заявки — нічого не потрібно пояснювати заново.
+                </p>
+              </div>
+            )}
             <Button className="mt-5 w-full" onClick={onClose}>
               Повернутися до розрахунку
             </Button>

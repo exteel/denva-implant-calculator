@@ -15,7 +15,7 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
-    command: `npx serve out -l ${PORT} --no-clipboard`,
+    command: `python3 -m http.server ${PORT} --directory out`,
     port: PORT,
     reuseExistingServer: true,
   },

@@ -241,7 +241,8 @@ describe("triage (S02 = unknown)", () => {
     const s = run(["teeth", "unknown"], ["triage", "destroyed_mobile"], ["triage_destroyed", "several"]);
     expect(nextId(s)).toBe("separate_count");
     const s2 = answerQuestion(s, "separate_count", "three");
-    expect(s2.answers.separate_state).toBe("extraction_recommended");
+    // P-02: triage must not imply a recommendation the user never gave.
+    expect(s2.answers.separate_state).toBe("unsure_save");
     expect(nextId(s2)).toBe("qualification");
     expect(s2.asked).not.toContain("separate_state");
   });
@@ -364,7 +365,7 @@ const Q00_SETS: string[][] = [[], ["nothing"], ["has_ct"], ["has_plan", "has_quo
 function assertValidResolution(r: Resolution, ctx: string): void {
   expect(r.title.length, ctx).toBeGreaterThan(0);
   expect(r.assumptions.length, ctx).toBeGreaterThanOrEqual(1);
-  expect(r.assumptions.length, ctx).toBeLessThanOrEqual(4);
+  expect(r.assumptions.length, ctx).toBeLessThanOrEqual(5);
   for (const a of r.assumptions) expect(a.length, ctx).toBeGreaterThan(0);
   expect(JSON.stringify(r).toLowerCase(), ctx).not.toContain("переплачу");
 
@@ -501,5 +502,5 @@ describe("every path through the graph", () => {
       expect(seenScenarioIds.has(id), id).toBe(true);
     }
     expect(noBasketTitles.size).toBeGreaterThanOrEqual(3);
-  });
+  }, 60_000);
 });

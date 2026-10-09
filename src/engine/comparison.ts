@@ -246,6 +246,9 @@ export function compareQuote(input: QuoteInput, ctx: ComparisonContext): Compari
     }
     const hasImplants = scope.includes("implants");
     const hasCrowns = scope.includes("crowns");
+    // Prosthetic-only baskets (implant already placed / crown redo) have no
+    // new implants, so the comparable scope is "crowns without implants".
+    const prostheticOnly = findScenario(ctx)?.parts.every((p) => p.modifiers.implants === 0) ?? false;
     // A missing core part is also an "unclear what's included" situation
     // (ТЗ §15), so we route it to the line-by-line check: unclearOffer = true.
     if (!hasCrowns) {
@@ -254,7 +257,13 @@ export function compareQuote(input: QuoteInput, ctx: ComparisonContext): Compari
         true,
       );
     }
-    if (!hasImplants) {
+    if (prostheticOnly && hasImplants) {
+      return notComparable(
+        "Пропозиція містить імпланти, а наш розрахунок — лише ортопедичний етап на вже встановлених імплантах. Такі обсяги некоректно порівнювати напряму.",
+        true,
+      );
+    }
+    if (!prostheticOnly && !hasImplants) {
       return notComparable(
         "У пропозиції немає імплантів — порівнювати її з повним лікуванням некоректно.",
         true,

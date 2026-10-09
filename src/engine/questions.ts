@@ -245,7 +245,7 @@ export const QUESTIONS: Record<string, Question> = {
   triage: {
     id: "triage",
     title: "Що найкраще описує вашу ситуацію?",
-    subtitle: "Допоможемо підібрати відповідний сценарій — це займе ще одне-два простих запитання.",
+    subtitle: "Допоможемо підібрати відповідний сценарій — це займе ще одне-два прості запитання.",
     type: "single",
     options: [
       opt("missing_teeth", "Немає одного або кількох зубів"),
@@ -276,7 +276,7 @@ export const QUESTIONS: Record<string, Question> = {
     options: [
       opt("one", "1 зуб", { sets: { resolved_teeth: "one", single_state: "unsure_save" } }),
       opt("several", "Кілька", {
-        sets: { resolved_teeth: "separate", separate_state: "extraction_recommended" },
+        sets: { resolved_teeth: "separate", separate_state: "unsure_save" },
       }),
       opt("most_one_jaw", "Більшість на одній щелепі", {
         sets: { resolved_teeth: "full_arch", arch_situation: "mostly_destroyed" },

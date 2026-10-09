@@ -311,6 +311,22 @@ describe("priceScenario — basket-record precedence & market meta", () => {
     expect(p.market.geoScope).toEqual({ level: "city", id: "kyiv" });
   });
 
+  it("basket_record: breakdown lines sum exactly to the total; temp crown adds only its line", () => {
+    const sumLines = (p: ReturnType<typeof priceScenario>, key: "p25" | "median" | "p75") =>
+      p.lines.reduce((acc, l) => acc + l.range[key], 0);
+    for (const seg of ["BASIC", "OPTIMAL", "PREMIUM"] as const) {
+      const std = priceScenario(scenarioOf("SINGLE_TOOTH_STANDARD"), "kyiv", alignedPackage(seg), opts);
+      expect(std.source).toBe("basket_record");
+      for (const key of ["p25", "median", "p75"] as const) expect(sumLines(std, key)).toBe(std.total[key]);
+
+      const temp = priceScenario(scenarioOf("SINGLE_TOOTH_TEMP"), "kyiv", alignedPackage(seg), opts);
+      expect(temp.source).toBe("basket_record");
+      const tempLine = temp.lines.find((l) => l.code === "TEMP_CROWN_PACKAGE")!;
+      expect(temp.total.median - std.total.median).toBe(tempLine.range.median);
+      for (const key of ["p25", "median", "p75"] as const) expect(sumLines(temp, key)).toBe(temp.total[key]);
+    }
+  });
+
   it("customised package → composed", () => {
     const p = priceScenario(
       scenarioOf("SINGLE_TOOTH_STANDARD"),
@@ -390,7 +406,8 @@ describe("scenarioIncluded", () => {
     const list = scenarioIncluded(bothJaws("FULL_ARCH_AOX4"));
     expect(new Set(list).size).toBe(list.length);
     expect(list.some((l) => l.startsWith("Верхня"))).toBe(false);
-    expect(list).toEqual(BASKETS.FULL_ARCH_AOX4.included);
+    expect(list[0]).toMatch(/^Розрахунок для обох щелеп/);
+    expect(list.slice(1)).toEqual(BASKETS.FULL_ARCH_AOX4.included);
   });
 
   it("prefixes by jaw when baskets differ", () => {
@@ -408,7 +425,7 @@ describe("scenarioIncluded", () => {
   });
 
   it("IMPLANT_ALREADY_PLACED says the healing abutment is conditional", () => {
-    expect(scenarioIncluded(scenarioOf("IMPLANT_ALREADY_PLACED"))).toContain("Формувач — за потреби");
+    expect(scenarioIncluded(scenarioOf("IMPLANT_ALREADY_PLACED"))).toContain("Формувач ясен (якщо потрібен — враховано в розрахунку)");
   });
 });
 
@@ -449,5 +466,18 @@ describe("every basket × segment × location", () => {
   it("composition helper sanity", () => {
     expect(COMPONENT_INFO.DIAGNOSTICS_SCAN.perTreatment).toBe(true);
     expect(formatUah(1000)).toContain("грн");
+  });
+});
+
+describe("scenarioIncluded — prosthetic-only multi-tooth scenario", () => {
+  it("MULTIPLE_SEPARATE with every implant already placed lists only the prosthetic stage", () => {
+    const s: Scenario = {
+      id: "MULTIPLE_SEPARATE_2",
+      label: "2 зуби окремо",
+      parts: [{ basket: "MULTIPLE_SEPARATE", modifiers: { implants: 0, existingImplants: 2, units: 2, tempCrowns: 0 } }],
+    };
+    const list = scenarioIncluded(s);
+    expect(list).toEqual(BASKETS.IMPLANT_ALREADY_PLACED.included);
+    expect(list.join(" ")).not.toContain("Імпланти та їх встановлення");
   });
 });

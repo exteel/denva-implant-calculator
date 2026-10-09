@@ -76,7 +76,8 @@ export function CityStep({ onSelect }: { onSelect: (locationId: string) => void 
               <li key={oblast.id}>
                 <button
                   type="button"
-                  onClick={() => onSelect(oblastLocationId(oblast.id))}
+                  // м. Київ is a city with its own market data, not an oblast.
+                  onClick={() => onSelect(oblast.id === "kyiv-city" ? "kyiv" : oblastLocationId(oblast.id))}
                   className="flex min-h-12 w-full items-center rounded-2xl border border-line bg-paper px-4 py-2.5 text-left text-[15px] font-bold hover:border-brand hover:bg-brand-soft"
                 >
                   {oblast.name}

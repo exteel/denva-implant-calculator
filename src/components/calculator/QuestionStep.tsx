@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Question } from "@/engine/types";
 import { Button } from "@/components/ui/Button";
 
@@ -12,9 +12,20 @@ interface Props {
 }
 
 export function QuestionStep({ question, current, onAnswer }: Props) {
+  // The clicked option unmounts on every answer; move focus to the new
+  // question so keyboard and screen-reader users aren't dropped to <body>.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus({ preventScroll: true });
+  }, []);
+
   return (
     <div>
-      <h1 className="text-[26px] leading-tight font-extrabold tracking-tight text-balance sm:text-[30px]">
+      <h1
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-[26px] leading-tight font-extrabold tracking-tight text-balance outline-none sm:text-[30px]"
+      >
         {question.title}
       </h1>
       {question.subtitle && (

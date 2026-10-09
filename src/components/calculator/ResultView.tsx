@@ -10,19 +10,19 @@ import {
   MIN_LOCAL_OBSERVATIONS,
 } from "@/engine/confidence";
 import { geoChain, geoScopeLabel, locationLabel } from "@/engine/geo";
-import { formatRange, formatUah } from "@/engine/format";
+import { formatRange, formatUah, pluralUk } from "@/engine/format";
 import { routeCta } from "@/engine/routing";
-import type { ComparisonContext } from "@/engine/comparison";
+import { compareQuote, type ComparisonContext } from "@/engine/comparison";
 import {
   SEGMENTS,
   type Answers,
   type ClinicalConfidence,
-  type ComparisonResult,
   type ExtraCode,
   type PackageChoice,
   type PriceRange,
   type PricedScenario,
   type Qualification,
+  type QuoteInput,
   type Resolution,
   type Scenario,
   type Segment,
@@ -36,11 +36,11 @@ import { ComparisonPanel } from "./ComparisonPanel";
 import { LeadDialog } from "./LeadDialog";
 
 const CLINICAL_EXPLANATION: Record<ClinicalConfidence, string> = {
-  HIGH: "Стандартна ситуація — сценарій лікування зазвичай передбачуваний.",
+  HIGH: "Для такої ситуації лікування зазвичай відповідає стандартному сценарію.",
   MEDIUM_HIGH: "Сценарій типовий, але деталі уточнить лікар після огляду.",
   MEDIUM: "Ми використали референсний сценарій — реальний план може відрізнятися.",
   LOW_MEDIUM: "Без огляду та знімка план може суттєво відрізнятися від нашого сценарію.",
-  LOW: "Без КТ і плану від лікаря ситуацію неможливо оцінити точно — це лише напрям.",
+  LOW: "Без огляду лікаря таку ситуацію неможливо оцінити точно — це лише напрям.",
 };
 
 const CONFIDENCE_TONE: Record<string, string> = {
@@ -91,8 +91,7 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
   const [customPkg, setCustomPkg] = useState<PackageChoice>(alignedPackage("OPTIMAL"));
   const [tempCrown, setTempCrown] = useState(false);
   const [compareOpen, setCompareOpen] = useState(qualification.hasQuote);
-  const [comparison, setComparison] = useState<ComparisonResult | null>(null);
-  const [offerUah, setOfferUah] = useState<number | null>(null);
+  const [quote, setQuote] = useState<QuoteInput | null>(null);
   const [leadOpen, setLeadOpen] = useState(false);
 
   const visibleScenarios = showSecondary ? resolution.scenarios : primaryScenarios;
@@ -138,6 +137,21 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
     return map;
   }, [locationId]);
 
+  const comparisonContext: ComparisonContext | null = useMemo(
+    () =>
+      activePriced && resolution.comparisonScope
+        ? { resolution, priced: activePriced, extraUnitPrices }
+        : null,
+    [activePriced, resolution, extraUnitPrices],
+  );
+  // Recomputed from the stored quote, so switching scenario / segment /
+  // package / temp crown never leaves a stale comparison on screen.
+  const comparison = useMemo(
+    () => (quote && comparisonContext ? compareQuote(quote, comparisonContext) : null),
+    [quote, comparisonContext],
+  );
+  const offerUah = quote?.amountUah ?? null;
+
   const cta = routeCta({ resolution, qualification, comparison });
   const hasImplantAxis = activePriced?.lines.some((l) => l.axis === "implant") ?? false;
   const showMedian = (activePriced?.market.minN ?? 0) >= MIN_LOCAL_OBSERVATIONS;
@@ -177,7 +191,7 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
     setCustomizing(false);
     setSegment(s);
     setCustomPkg(alignedPackage(s));
-    if (s !== segment || customizing) track("segment_changed", { segment: s, scenario_id: scenarioId });
+    if (s !== segment) track("segment_changed", { segment: s, scenario_id: scenarioId });
   };
 
   const changeCustom = (pkg: PackageChoice) => {
@@ -193,11 +207,6 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
   const packageLabel = isAlignedPackage(activePkg)
     ? SEGMENT_INFO[activePkg.implant].label
     : `імплант ${SEGMENT_INFO[activePkg.implant].label.toLowerCase()}, протезування ${SEGMENT_INFO[activePkg.prosthetic].label.toLowerCase()}`;
-
-  const comparisonContext: ComparisonContext | null =
-    activePriced && resolution.comparisonScope
-      ? { resolution, priced: activePriced, extraUnitPrices }
-      : null;
 
   const buildPayload = (contact: LeadPayload["contact"]): LeadPayload => ({
     service: cta.service,
@@ -258,12 +267,10 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
         <div className="rounded-[var(--radius-card)] border border-warn-line bg-warn-soft p-5" role="note">
           <p className="font-extrabold text-warn">Спершу — перевірка плану</p>
           <p className="mt-1 text-[15px] leading-relaxed text-ink-soft">
-            Видалення багатьох зубів — незворотне рішення. Перш ніж порівнювати ціни, варто, щоб
-            незалежний лікар переглянув план і підтвердив, які зуби справді неможливо зберегти.
+            Якщо вам рекомендують видалити багато зубів, пам’ятайте: це незворотне рішення. Перш ніж
+            порівнювати ціни, варто, щоб незалежний лікар переглянув ситуацію і підтвердив, які зуби
+            справді неможливо зберегти. Як це зробити — внизу сторінки.
           </p>
-          <Button variant="secondary" className="mt-3" onClick={openCta}>
-            {cta.label}
-          </Button>
         </div>
       )}
 
@@ -342,7 +349,7 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
 
             <p className="mt-3 mb-3 text-sm text-muted">
               {activePriced.stage1
-                ? "Вартість однієї щелепи розділена на етапи — перший етап не є ціною «під ключ»."
+                ? `Вартість ${scenario.parts.length > 1 ? "обох щелеп" : "однієї щелепи"} розділена на етапи — перший етап не є ціною «під ключ».`
                 : "Повна вартість лікування за ринковими сегментами. Оберіть сегмент, щоб побачити деталі."}
             </p>
 
@@ -486,13 +493,14 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
                 {MARKET_CONFIDENCE_EXPLANATION[activePriced.market.confidence]}
               </p>
               <p className="mt-2 text-sm leading-relaxed text-muted">
-                Дані: {geoScopeLabel(activePriced.market.geoScope)} · від {activePriced.market.minN} спостережень ·
-                оновлено {formatMonth(activePriced.market.updatedAt)}
+                Дані: {geoScopeLabel(activePriced.market.geoScope)} · від {activePriced.market.minN}{" "}
+                {pluralUk(activePriced.market.minN, "спостереження", "спостережень", "спостережень")} · оновлено:{" "}
+                {formatMonth(activePriced.market.updatedAt)}
               </p>
               {activePriced.market.usedFallback && requestedScope && (
                 <p className="mt-1 text-sm leading-relaxed text-muted">
-                  Для {geoScopeLabel(requestedScope)} поки замало незалежних цін, тому частину даних взято
-                  з ширшої території: {geoScopeLabel(activePriced.market.geoScope)}.
+                  Даних по території «{geoScopeLabel(requestedScope)}» поки замало, тому частину цін взято з
+                  ширшої території: {geoScopeLabel(activePriced.market.geoScope)}.
                 </p>
               )}
               {activePriced.market.isDemo && (
@@ -515,10 +523,8 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
                 context={comparisonContext}
                 comparedWith={`${scenario?.label ?? ""} · ${packageLabel}`}
                 result={comparison}
-                onResult={(result, amount) => {
-                  setComparison(result);
-                  setOfferUah(amount);
-                }}
+                onSubmit={setQuote}
+                onReset={() => setQuote(null)}
               />
             </div>
           ) : (
@@ -531,6 +537,16 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
               </Button>
             </>
           )}
+        </Card>
+      )}
+
+      {qualification.hasQuote && !comparisonContext && (
+        <Card>
+          <SectionTitle>Вам уже назвали вартість?</SectionTitle>
+          <p className="mt-1 text-[15px] leading-relaxed text-ink-soft">
+            Для цієї ситуації немає стандартизованого кошика, з яким можна чесно порівняти суму. Краще
+            розібрати пропозицію по пунктах разом із лікарем — це наступний крок нижче.
+          </p>
         </Card>
       )}
 

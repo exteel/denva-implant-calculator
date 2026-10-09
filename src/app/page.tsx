@@ -69,7 +69,7 @@ export default function LandingPage() {
               aria-hidden
               className="rounded-[var(--radius-card)] border border-line bg-paper p-5 shadow-[0_20px_50px_-30px_rgba(16,24,40,0.35)]"
             >
-              <p className="text-xs font-bold tracking-wide text-muted uppercase">Приклад результату</p>
+              <p className="text-xs font-bold tracking-wide text-muted uppercase">Приклад результату · демо-дані</p>
               <p className="mt-1 text-[15px] font-extrabold">Один зуб · Львів</p>
               <div className="mt-4 space-y-2.5">
                 {[

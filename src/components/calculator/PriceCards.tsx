@@ -12,26 +12,29 @@ export function StageRows({ priced, showMedian }: { priced: PricedScenario; show
     { label: "Етап 2", hint: "постійна конструкція", range: priced.stage2 },
   ];
   return (
-    <dl className="mt-3 space-y-1.5 border-t border-line pt-3 text-sm">
+    <span className="mt-3 block space-y-1.5 border-t border-line pt-3 text-sm">
       {rows.map((row) => (
-        <div key={row.label} className="flex items-baseline justify-between gap-3">
-          <dt className="text-ink-soft">
+        <span key={row.label} className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <span className="text-ink-soft">
             <span className="font-bold text-ink">{row.label}</span>{" "}
             <span className="hidden sm:inline">· {row.hint}</span>
-          </dt>
-          <dd className="tabular shrink-0 font-bold">{formatRange(row.range)}</dd>
-        </div>
+          </span>
+          <span className="tabular font-bold whitespace-nowrap">{formatRange(row.range)}</span>
+        </span>
       ))}
-      <div className="flex items-baseline justify-between gap-3 border-t border-dashed border-line pt-1.5">
-        <dt className="font-bold">Повне лікування</dt>
-        <dd className="tabular shrink-0 font-extrabold">
-          {formatRange(priced.total)}
+      <span className="flex flex-wrap items-baseline justify-between gap-x-3 border-t border-dashed border-line pt-1.5">
+        <span className="font-bold">Повне лікування</span>
+        <span className="tabular text-right font-extrabold">
+          <span className="whitespace-nowrap">{formatRange(priced.total)}</span>
           {showMedian && (
-            <span className="ml-1 font-semibold text-muted">· ~{formatUah(priced.total.median)}</span>
+            <span className="block font-semibold whitespace-nowrap text-muted">
+              {" "}
+              типова ~{formatUah(priced.total.median)}
+            </span>
           )}
-        </dd>
-      </div>
-    </dl>
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -67,7 +70,7 @@ export function SegmentCards({ pricedBySegment, selected, onSelect, showMedian, 
               isSelected ? "border-brand bg-brand-soft/60 ring-1 ring-brand" : "border-line bg-paper"
             }`}
           >
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               <span className="flex items-center gap-2 text-[16px] font-extrabold">
                 <span
                   aria-hidden
@@ -82,25 +85,25 @@ export function SegmentCards({ pricedBySegment, selected, onSelect, showMedian, 
               {!isArch && (
                 <span className="tabular text-[17px] font-extrabold">{formatRange(priced.total)}</span>
               )}
-            </div>
+            </span>
             {!isArch && showMedian && (
-              <p className="tabular mt-0.5 text-right text-sm font-semibold text-muted">
+              <span className="tabular mt-0.5 block text-right text-sm font-semibold text-muted">
                 типова ціна ~{formatUah(priced.total.median)}
-              </p>
+              </span>
             )}
             {!isArch && (
-              <div className="relative mt-3 h-1.5 rounded-full bg-canvas" aria-hidden>
-                <div
+              <span className="relative mt-3 block h-1.5 rounded-full bg-canvas" aria-hidden>
+                <span
                   className="absolute h-1.5 rounded-full bg-brand/70"
                   style={{ left: `${left}%`, width: `${width}%` }}
                 />
-                <div
+                <span
                   className="absolute -top-0.5 h-2.5 w-0.5 rounded bg-brand-dark"
                   style={{ left: `${mid}%` }}
                 />
-              </div>
+              </span>
             )}
-            <p className="mt-2.5 text-sm leading-relaxed text-ink-soft">{info.description}</p>
+            <span className="mt-2.5 block text-sm leading-relaxed text-ink-soft">{info.description}</span>
             {isArch && <StageRows priced={priced} showMedian={showMedian} />}
           </button>
         );

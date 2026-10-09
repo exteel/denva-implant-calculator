@@ -48,6 +48,11 @@ export interface LeadResult {
 
 const STORAGE_KEY = "denva_leads";
 
+/** True while no CRM/backend endpoint is configured (demo mode). */
+export function isLeadStubMode(): boolean {
+  return !process.env.NEXT_PUBLIC_LEAD_ENDPOINT;
+}
+
 export async function submitLead(payload: LeadPayload): Promise<LeadResult> {
   const endpoint = process.env.NEXT_PUBLIC_LEAD_ENDPOINT;
   if (endpoint) {

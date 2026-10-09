@@ -18,9 +18,26 @@ interface Props {
   context: ComparisonContext;
   /** e.g. "All-on-6 · Оптимальний" — what the market range refers to. */
   comparedWith: string;
+  /**
+   * Computed by the parent from the stored quote, so it always matches the
+   * scenario / package currently on screen (never a stale range).
+   */
   result: ComparisonResult | null;
-  onResult: (result: ComparisonResult | null, offerUah: number | null) => void;
+  onSubmit: (input: QuoteInput) => void;
+  onReset: () => void;
 }
+
+/**
+ * "68 000", "68.000", "68,000" → 68000; "1 250,50" → 1250.5. A dot or comma
+ * followed by exactly three digits is a thousands separator, not a decimal.
+ */
+export function parseAmount(raw: string): number {
+  const compact = raw.replace(/\s/g, "");
+  if (/^\d{1,3}([.,]\d{3})+$/.test(compact)) return Number(compact.replace(/[.,]/g, ""));
+  return Number(compact.replace(",", "."));
+}
+
+const MIN_AMOUNT = { UAH: 1000, EUR: 20 } as const;
 
 const POSITION_TONE: Record<string, string> = {
   below: "bg-brand-soft text-brand-dark",
@@ -31,7 +48,7 @@ const POSITION_TONE: Record<string, string> = {
 };
 
 /** ТЗ §14 (C00) + §14.3 (R01). */
-export function ComparisonPanel({ context, comparedWith, result, onResult }: Props) {
+export function ComparisonPanel({ context, comparedWith, result, onSubmit, onReset }: Props) {
   const scope = context.resolution.comparisonScope;
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState<"UAH" | "EUR">("UAH");
@@ -41,8 +58,8 @@ export function ComparisonPanel({ context, comparedWith, result, onResult }: Pro
   const [touched, setTouched] = useState(false);
   const amountId = useId();
 
-  const numeric = Number(amount.replace(/\s/g, "").replace(",", "."));
-  const amountOk = Number.isFinite(numeric) && numeric > 0;
+  const numeric = parseAmount(amount);
+  const amountOk = Number.isFinite(numeric) && numeric >= MIN_AMOUNT[currency];
   const scopeOk = scope === "teeth" ? teeth.length > 0 : arch !== null;
 
   const toggleTeeth = (id: TeethScopeItem, exclusive?: boolean) => {
@@ -70,7 +87,7 @@ export function ComparisonPanel({ context, comparedWith, result, onResult }: Pro
       position: comparison.comparable ? comparison.position : null,
       deviation_pct: comparison.comparable ? comparison.deviationPct : null,
     });
-    onResult(comparison, amountUah);
+    onSubmit(input);
   };
 
   if (result) {
@@ -96,7 +113,7 @@ export function ComparisonPanel({ context, comparedWith, result, onResult }: Pro
             <p className="mt-1 text-[15px] leading-relaxed text-ink-soft">{result.reason}</p>
           </div>
         )}
-        <Button variant="ghost" onClick={() => onResult(null, null)}>
+        <Button variant="ghost" onClick={onReset}>
           Змінити дані пропозиції
         </Button>
       </div>
@@ -135,7 +152,13 @@ export function ComparisonPanel({ context, comparedWith, result, onResult }: Pro
             ))}
           </div>
         </div>
-        {touched && !amountOk && <p className="mt-1 text-sm text-bad">Вкажіть суму пропозиції.</p>}
+        {touched && !amountOk && (
+          <p className="mt-1 text-sm text-bad">
+            {Number.isFinite(numeric) && numeric > 0
+              ? "Сума виглядає замалою — вкажіть повну вартість лікування."
+              : "Вкажіть суму пропозиції."}
+          </p>
+        )}
       </div>
 
       {scope === "teeth" ? (

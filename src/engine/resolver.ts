@@ -228,7 +228,10 @@ function resolveSingle(a: Answers): Resolution {
             ? []
             : ["Сумісність компонентів треба перевірити — система імпланта невідома."]),
         ],
-        relevantExtras: [],
+        relevantExtras: [
+          { code: "SOFT_TISSUE_GRAFT", note: "якщо знадобиться за результатами огляду" },
+          { code: "TEMPORARY_CROWN", note: "якщо потрібна тимчасова коронка" },
+        ],
         comparisonScope: "teeth",
         flags: { existingImplants: true },
       });
@@ -250,7 +253,10 @@ function resolveSingle(a: Answers): Resolution {
             "Припускаємо, що імплант у порядку і потрібно переробити лише ортопедичний етап — нову коронку.",
             "Зняття старої коронки та можливі додаткові роботи можуть оплачуватися окремо; це оцінює лікар після огляду.",
           ],
-          relevantExtras: [],
+          relevantExtras: [
+            { code: "TEMPORARY_CROWN", note: "якщо потрібна тимчасова коронка на час виготовлення нової" },
+            { code: "SOFT_TISSUE_GRAFT", note: "якщо знадобиться за результатами огляду" },
+          ],
           comparisonScope: "teeth",
           flags: { existingImplants: true },
         });
@@ -442,6 +448,24 @@ function resolveAdjacent(a: Answers, range: "2_3" | "4_6"): Resolution {
 
 const SEPARATE_N: Record<string, number> = { two: 2, three: 3, four: 4 };
 
+/** "1 новий імплант", "2 нові імпланти", "5 нових імплантів". */
+function newImplantsWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return `${n} новий імплант`;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} нові імпланти`;
+  return `${n} нових імплантів`;
+}
+
+/** "1 вже встановлений імплант", "2 вже встановлені імпланти". */
+function existingImplantsWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return `${n} вже встановлений імплант`;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} вже встановлені імпланти`;
+  return `${n} вже встановлених імплантів`;
+}
+
 function separateScenario(n: number, existingImplants: number, label?: string): Scenario {
   const implants = Math.max(n - existingImplants, 0);
   return {
@@ -450,7 +474,9 @@ function separateScenario(n: number, existingImplants: number, label?: string): 
     parts: [part("MULTIPLE_SEPARATE", { implants, existingImplants, units: n })],
     referenceNote:
       existingImplants > 0
-        ? `Референс для оцінки: ${implantsWord(implants)} нових + ${implantsWord(existingImplants)} уже встановлено + ${unitsWord(n)}`
+        ? implants > 0
+          ? `Референс для оцінки: ${newImplantsWord(implants)} + ${existingImplantsWord(existingImplants)} + ${unitsWord(n)}`
+          : `Референс для оцінки: ${existingImplantsWord(existingImplants)} + ${unitsWord(n)}`
         : `Референс для оцінки: ${implantsWord(n)} + ${unitsWord(n)}`,
   };
 }
@@ -507,11 +533,12 @@ function resolveSeparate(a: Answers): Resolution {
   }
   if (withImplants) {
     assumptions.push(
-      existingRaw === "unknown"
+      (existingRaw === "unknown"
         ? "Кількість уже встановлених імплантів невідома — для оцінки беремо один імплант."
-        : "Для вже встановлених імплантів рахуємо лише ортопедичний етап.",
+        : "Для вже встановлених імплантів рахуємо лише ортопедичний етап.") +
+        (systemKnown ? "" : " Сумісність компонентів треба перевірити — система імплантів невідома."),
     );
-    if (!systemKnown) assumptions.push("Сумісність компонентів треба перевірити — система імплантів невідома.");
+    if (counts.some((n) => n > existingBase)) assumptions.push(NOT_INCLUDED_ASSUMPTION);
   } else {
     assumptions.push(NOT_INCLUDED_ASSUMPTION);
   }
@@ -525,7 +552,7 @@ function resolveSeparate(a: Answers): Resolution {
         : countAnswer === "five_six"
           ? "5–6 зубів у різних місцях"
           : `${teethWord(counts[0])} у різних місцях`,
-    assumptions: assumptions.slice(0, 4),
+    assumptions,
     conditionalNote: unsure ? UNSURE_SAVE_NOTE_MANY : undefined,
     relevantExtras: multiExtras({
       extraction: withImplants ? undefined : stateExtraction(state, counts[0]),
@@ -660,7 +687,7 @@ function resolveArch(a: Answers): Resolution {
     STAGE_ASSUMPTION,
   ];
   if (teethRemain) {
-    assumptions.push("Видалення зубів, що залишилися, показано окремо серед можливих додаткових витрат.");
+    assumptions.push("Якщо лікар рекомендуватиме видалити зуби, що залишилися, — вартість видалення показано окремо серед можливих додаткових витрат.");
   }
 
   return priced({
@@ -705,10 +732,12 @@ function resolveBoth(a: Answers): Resolution {
   };
 
   if (hasPlan && upperAns === "other" && lowerAns === "other") {
-    return noBasket(
+    const r = noBasket(
       "Обидві щелепи",
       "Для запропонованого вам плану немає співставного кошика, тому ми не показуємо ціну, щоб не вводити в оману. Найкращий наступний крок — перевірити цей план: якщо у вас є план чи кошторис, його можна розібрати в CheckMyPlan, або отримати консультацію.",
     );
+    // P-06 still applies: many problem teeth on both jaws → plan check first.
+    return { ...r, flags: { ...r.flags, massExtraction: mass } };
   }
 
   // One jaw almost toothless, the other partly preserved: only a single-arch
@@ -784,7 +813,7 @@ function resolveBoth(a: Answers): Resolution {
   return priced({
     scenarios,
     clinicalConfidence: confidence,
-    assumptions: assumptions.slice(0, 4),
+    assumptions,
     ...common,
   });
 }

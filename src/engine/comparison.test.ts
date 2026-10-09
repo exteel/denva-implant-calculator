@@ -376,3 +376,28 @@ describe("guards", () => {
     outputs.forEach(noPay);
   });
 });
+
+describe("compareQuote — prosthetic-only basket (implant already placed)", () => {
+  const crownOnly: Scenario = {
+    id: "IMPLANT_ALREADY_PLACED",
+    label: "Коронка на імпланті",
+    parts: [
+      { basket: "IMPLANT_ALREADY_PLACED", modifiers: { implants: 0, existingImplants: 1, units: 1, tempCrowns: 0 } },
+    ],
+  };
+  const ctx: ComparisonContext = {
+    resolution: resolution({ scenarios: [crownOnly], defaultScenarioId: crownOnly.id, relevantExtras: [] }),
+    priced: priced(crownOnly.id),
+    extraUnitPrices: EXTRA_PRICES,
+  };
+
+  it("crowns without implants is the comparable scope", () => {
+    const r = compareQuote({ amountUah: 50000, teethScope: ["crowns"] }, ctx);
+    expect(r.comparable).toBe(true);
+  });
+
+  it("an offer that also includes implants is not comparable", () => {
+    const r = compareQuote({ amountUah: 50000, teethScope: ["implants", "crowns"] }, ctx);
+    expect(r.comparable).toBe(false);
+  });
+});

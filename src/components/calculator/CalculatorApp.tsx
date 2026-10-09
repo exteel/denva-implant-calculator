@@ -14,6 +14,7 @@ import {
 } from "@/engine/questions";
 import { resolve } from "@/engine/resolver";
 import { findCity, locationLabel } from "@/engine/geo";
+import type { Answers } from "@/engine/types";
 import { track } from "@/services/analytics";
 import { Logo } from "@/components/ui/Logo";
 import { CityStep } from "./CityStep";
@@ -26,6 +27,9 @@ export function CalculatorApp() {
   const [locationId, setLocationId] = useState<string | null>(null);
   const [flow, setFlow] = useState<FlowState>(() => startFlow());
   const [utmSearch, setUtmSearch] = useState("");
+  // Last answer per question, so "Назад" shows what was picked before even
+  // though the flow itself drops the answer of the question it returns to.
+  const [remembered, setRemembered] = useState<Answers>({});
 
   const step = locationId ? currentStep(flow) : null;
   const isResult = step?.type === "result";
@@ -72,6 +76,7 @@ export function CalculatorApp() {
 
   const handleAnswer = (questionId: string, value: string | string[]) => {
     setFlow((prev) => answerQuestion(prev, questionId, value));
+    setRemembered((prev) => ({ ...prev, [questionId]: value }));
     if (questionId === "teeth") track("scenario_selected", { teeth: value });
     if (questionId === QUALIFICATION_ID) {
       const q = qualificationFromAnswers({ [QUALIFICATION_ID]: value });
@@ -132,7 +137,7 @@ export function CalculatorApp() {
           <QuestionStep
             key={step.questionId}
             question={QUESTIONS[step.questionId]}
-            current={flow.answers[step.questionId]}
+            current={flow.answers[step.questionId] ?? remembered[step.questionId]}
             onAnswer={(value) => handleAnswer(step.questionId, value)}
           />
         )}

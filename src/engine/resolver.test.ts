@@ -87,7 +87,7 @@ describe("6.1 one tooth", () => {
     expect(known.clinicalConfidence).toBe("HIGH");
     expect(known.flags.existingImplants).toBe(true);
     expect(known.flags.tempCrownOption).toBe(false);
-    expect(known.relevantExtras).toEqual([]);
+    expect(known.relevantExtras.map((e) => e.code)).toEqual(["SOFT_TISSUE_GRAFT", "TEMPORARY_CROWN"]);
     expect(known.assumptions.join(" ")).not.toContain("система імпланта невідома");
 
     const unknown = single("implant_placed", { implant_system_known: "no" });
