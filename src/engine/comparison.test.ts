@@ -54,6 +54,7 @@ function priced(scenarioId: string, over: Partial<PricedScenario> = {}): PricedS
       usedFallback: false,
       isDemo: true,
       updatedAt: "2026-09-01",
+      confidenceReasons: [],
     },
     source: "composed",
     ...over,
@@ -399,5 +400,23 @@ describe("compareQuote — prosthetic-only basket (implant already placed)", () 
   it("an offer that also includes implants is not comparable", () => {
     const r = compareQuote({ amountUah: 50000, teethScope: ["implants", "crowns"] }, ctx);
     expect(r.comparable).toBe(false);
+  });
+});
+
+describe("compareQuote — full arch «інші додаткові процедури» (ТЗ §14.2)", () => {
+  it("still compares, same range, and explains the difference may come from those procedures", () => {
+    const plain = compareQuote({ amountUah: 90000, fullArchScope: "full" }, archCtx());
+    const other = compareQuote({ amountUah: 90000, fullArchScope: "full", fullArchIncludesOther: true }, archCtx());
+    expect(plain.comparable && other.comparable).toBe(true);
+    if (!plain.comparable || !other.comparable) return;
+    expect(other.range).toEqual(plain.range);
+    expect(other.explanation).toContain("інші додаткові процедури");
+    expect(plain.explanation).not.toContain("інші додаткові процедури");
+    expect(other.explanation).not.toMatch(/переплачу/i);
+  });
+
+  it("is ignored for scopes other than full treatment", () => {
+    const r = compareQuote({ amountUah: 50000, fullArchScope: "implants_temp", fullArchIncludesOther: true }, archCtx());
+    expect(r.comparable && r.explanation.includes("інші додаткові процедури")).toBe(false);
   });
 });

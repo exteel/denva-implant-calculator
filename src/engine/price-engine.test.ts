@@ -486,3 +486,16 @@ describe("scenarioIncluded — prosthetic-only multi-tooth scenario", () => {
     expect(list.join(" ")).not.toContain("Імпланти та їх встановлення");
   });
 });
+
+describe("market meta — source diversity (ТЗ §16.2)", () => {
+  it("kharkiv demo data has one source type → confidence lowered with a reason", () => {
+    const p = priceScenario(scenarioOf("SINGLE_TOOTH_STANDARD"), "kharkiv", alignedPackage("OPTIMAL"), opts);
+    expect(p.market.confidence).toBe("LOW");
+    expect(p.market.confidenceReasons).toContain("single_source_type");
+  });
+
+  it("lviv (n=32, 3 source types, 11 clinics) stays HIGH", () => {
+    const p = priceScenario(scenarioOf("SINGLE_TOOTH_STANDARD"), "lviv", alignedPackage("OPTIMAL"), opts);
+    expect(p.market.confidence).toBe("HIGH");
+  });
+});

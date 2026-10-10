@@ -7,6 +7,7 @@ import {
   CLINICAL_CONFIDENCE_LABEL,
   MARKET_CONFIDENCE_EXPLANATION,
   MARKET_CONFIDENCE_LABEL,
+  MARKET_CONFIDENCE_REASON_TEXT,
   MIN_LOCAL_OBSERVATIONS,
 } from "@/engine/confidence";
 import { geoChain, geoScopeLabel, locationLabel } from "@/engine/geo";
@@ -492,6 +493,12 @@ export function ResultView({ resolution, answers, locationId, qualification, utm
               <p className="mt-2 text-sm leading-relaxed text-ink-soft">
                 {MARKET_CONFIDENCE_EXPLANATION[activePriced.market.confidence]}
               </p>
+              {activePriced.market.confidence !== "HIGH" && activePriced.market.confidenceReasons.length > 0 && (
+                <p className="mt-1 text-sm leading-relaxed text-ink-soft">
+                  Що знижує точність:{" "}
+                  {activePriced.market.confidenceReasons.map((r) => MARKET_CONFIDENCE_REASON_TEXT[r]).join("; ")}.
+                </p>
+              )}
               <p className="mt-2 text-sm leading-relaxed text-muted">
                 Дані: {geoScopeLabel(activePriced.market.geoScope)} · від {activePriced.market.minN}{" "}
                 {pluralUk(activePriced.market.minN, "спостереження", "спостережень", "спостережень")} · оновлено:{" "}

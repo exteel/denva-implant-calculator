@@ -62,7 +62,8 @@ const CITY = {
   lviv: { mult: 1.0, n: 32 },
   odesa: { mult: 1.02, n: 24, updated: "2026-03-15" },
   dnipro: { mult: 0.97, n: 22 },
-  kharkiv: { mult: 0.95, n: 18 },
+  // Deliberately one source type only — exercises the ТЗ §16.2 diversity rule.
+  kharkiv: { mult: 0.95, n: 18, sources: ["clinic_sites"] },
   "ivano-frankivsk": { mult: 0.93, n: 14 },
   chernivtsi: { mult: 0.9, n: 9 }, // deliberately insufficient
   vinnytsia: { mult: 0.92, n: 6, updated: "2025-11-20" }, // insufficient + older
@@ -112,7 +113,7 @@ function jitter(key, amp = 0.03) {
 
 const round100 = (x) => Math.round(x / 100) * 100;
 
-function record({ code, scope, segment, median, n, spread, updated }) {
+function record({ code, scope, segment, median, n, spread, updated, sources }) {
   const [lo, hi] = spread;
   const m = round100(median);
   let p25 = round100(m * lo);
@@ -127,7 +128,7 @@ function record({ code, scope, segment, median, n, spread, updated }) {
     median: m,
     p75,
     n,
-    source_mix: { clinics: Math.max(3, Math.round(n / 3)), sources: SOURCES },
+    source_mix: { clinics: Math.max(3, Math.round(n / 3)), sources: sources ?? SOURCES },
     updated_at: updated ?? DEFAULT_UPDATED,
     original_currency: "UAH",
     is_demo: true,
@@ -201,7 +202,7 @@ const localFilter = (code) =>
 for (const [id, cfg] of Object.entries(CITY)) {
   for (const e of entries(localFilter)) {
     records.push(
-      record(scopeArgs(e, { level: "city", id }, cfg.mult, cfg.n, cfg.updated)),
+      record({ ...scopeArgs(e, { level: "city", id }, cfg.mult, cfg.n, cfg.updated), sources: cfg.sources }),
     );
   }
 }

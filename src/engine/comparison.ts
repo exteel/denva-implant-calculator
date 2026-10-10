@@ -43,6 +43,12 @@ export const FULL_ARCH_SCOPE_OPTIONS: { id: FullArchScope; label: string }[] = [
   { id: "unknown", label: "Не знаю" },
 ];
 
+/** ТЗ §14.2 "інші додаткові процедури" — shown as a separate chip. */
+export const FULL_ARCH_OTHER_LABEL = "Інші додаткові процедури";
+
+const OTHER_PROCEDURES_NOTE =
+  "У пропозиції є й інші додаткові процедури, яких немає в ринковому діапазоні, — частина різниці може пояснюватися саме ними.";
+
 export const FULL_ARCH_INCLUDE_OPTIONS: { id: ExtraCode; label: string }[] = [
   { id: "EXTRACTION_SIMPLE", label: "Видалення зубів" },
   { id: "BONE_AUGMENTATION", label: "Кісткові процедури" },
@@ -314,7 +320,15 @@ export function compareQuote(input: QuoteInput, ctx: ComparisonContext): Compari
       const basis = ["Повне лікування до постійних зубів", ...result.added.map((c) => EXTRA_LABEL[c])].join(
         " + ",
       );
-      return finish(offer, result.range, basis, result.added);
+      const compared = finish(offer, result.range, basis, result.added);
+      if (input.fullArchIncludesOther && compared.comparable) {
+        return {
+          ...compared,
+          explanation:
+            OTHER_PROCEDURES_NOTE + " " + compared.explanation,
+        };
+      }
+      return compared;
     }
     default:
       return notComparable(

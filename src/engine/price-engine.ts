@@ -7,12 +7,13 @@
  */
 import { BASKETS, COMPONENT_INFO, EXTRA_INFO } from "./catalog";
 import type { BasketComponentLine } from "./catalog";
-import { marketConfidence, minMarketConfidence, MIN_LOCAL_OBSERVATIONS } from "./confidence";
+import { assessMarketRecord, isSufficientRecord, minMarketConfidence } from "./confidence";
 import { GEO_LEVEL_RANK, geoChain } from "./geo";
 import { isAlignedPackage } from "./segments";
 import { MARKET_DATA } from "./market-data";
 import type {
   BasketCode,
+  MarketConfidenceReason,
   BasketModifiers,
   GeoScope,
   MarketConfidence,
@@ -39,6 +40,8 @@ export interface ResolvedRecord {
   scope: GeoScope;
   usedFallback: boolean;
   confidence: MarketConfidence;
+  /** ТЗ §16.2 factors that lowered the confidence of this record. */
+  confidenceReasons: MarketConfidenceReason[];
 }
 
 // ───────────────────────── Lookup ─────────────────────────
@@ -80,20 +83,20 @@ export function lookupPrice(
     const record = idx.get(recordKey(code, segment, scope));
     if (!record) continue;
     broadest = { record, scope };
-    if (record.n >= MIN_LOCAL_OBSERVATIONS) {
+    if (isSufficientRecord(record)) {
       chosen = { record, scope };
       break;
     }
   }
   const pick = chosen ?? broadest;
   if (!pick) return null;
+  const assessment = assessMarketRecord(pick.record, now);
   return {
     record: pick.record,
     scope: pick.scope,
     usedFallback: pick.scope.level !== chain[0].level,
-    confidence:
-      pick.record.confidence ??
-      marketConfidence(pick.record.n, pick.record.updated_at, now),
+    confidence: pick.record.confidence ?? assessment.level,
+    confidenceReasons: assessment.reasons,
   };
 }
 
@@ -169,6 +172,7 @@ function buildMeta(resolved: ResolvedRecord[]): MarketMeta {
     if (r.record.updated_at < updatedAt) updatedAt = r.record.updated_at;
     if (r.record.n < minN) minN = r.record.n;
   }
+  const confidenceReasons = [...new Set(resolved.flatMap((r) => r.confidenceReasons))];
   return {
     confidence: minMarketConfidence(resolved.map((r) => r.confidence)),
     minN,
@@ -176,6 +180,7 @@ function buildMeta(resolved: ResolvedRecord[]): MarketMeta {
     usedFallback: resolved.some((r) => r.usedFallback),
     isDemo: resolved.some((r) => r.record.is_demo),
     updatedAt,
+    confidenceReasons,
   };
 }
 

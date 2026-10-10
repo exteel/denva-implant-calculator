@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import {
   FULL_ARCH_INCLUDE_OPTIONS,
+  FULL_ARCH_OTHER_LABEL,
   FULL_ARCH_SCOPE_OPTIONS,
   TEETH_SCOPE_OPTIONS,
   compareQuote,
@@ -55,6 +56,7 @@ export function ComparisonPanel({ context, comparedWith, result, onSubmit, onRes
   const [teeth, setTeeth] = useState<TeethScopeItem[]>([]);
   const [arch, setArch] = useState<FullArchScope | null>(null);
   const [includes, setIncludes] = useState<ExtraCode[]>([]);
+  const [includesOther, setIncludesOther] = useState(false);
   const [touched, setTouched] = useState(false);
   const amountId = useId();
 
@@ -79,7 +81,12 @@ export function ComparisonPanel({ context, comparedWith, result, onSubmit, onRes
     const input: QuoteInput =
       scope === "teeth"
         ? { amountUah, teethScope: teeth }
-        : { amountUah, fullArchScope: arch ?? "unknown", fullArchIncludes: arch === "full" ? includes : [] };
+        : {
+            amountUah,
+            fullArchScope: arch ?? "unknown",
+            fullArchIncludes: arch === "full" ? includes : [],
+            fullArchIncludesOther: arch === "full" && includesOther,
+          };
     track("quote_entered", { amount_uah: amountUah, currency, scope });
     const comparison = compareQuote(input, context);
     track("quote_compared", {
@@ -230,6 +237,16 @@ export function ComparisonPanel({ context, comparedWith, result, onSubmit, onRes
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  aria-pressed={includesOther}
+                  onClick={() => setIncludesOther((v) => !v)}
+                  className={`min-h-10 rounded-full border px-4 text-sm font-bold ${
+                    includesOther ? "border-brand bg-brand text-white" : "border-line-strong bg-paper"
+                  }`}
+                >
+                  {FULL_ARCH_OTHER_LABEL}
+                </button>
               </div>
             </div>
           )}

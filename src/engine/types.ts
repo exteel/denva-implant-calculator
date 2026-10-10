@@ -296,7 +296,17 @@ export interface MarketMeta {
   isDemo: boolean;
   /** Oldest updated_at across the records used. */
   updatedAt: string;
+  /** ТЗ §16.2: why confidence is not higher (deduped across records). */
+  confidenceReasons: MarketConfidenceReason[];
 }
+
+/** ТЗ §16.2 quality factors that lower market confidence. */
+export type MarketConfidenceReason =
+  | "few_observations"
+  | "stale"
+  | "single_source_type"
+  | "few_clinics"
+  | "incomplete";
 
 export interface PricedScenario {
   scenarioId: string;
@@ -348,6 +358,11 @@ export interface QuoteInput {
   fullArchScope?: FullArchScope;
   /** "full" follow-up: which extras the offer explicitly includes. */
   fullArchIncludes?: ExtraCode[];
+  /**
+   * ТЗ §14.2 "або інші додаткові процедури": the offer includes extra
+   * procedures we can't price individually — compared, with a caveat.
+   */
+  fullArchIncludesOther?: boolean;
 }
 
 export type QuotePosition =
