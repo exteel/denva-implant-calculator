@@ -194,6 +194,8 @@ for (const [id, cfg] of Object.entries(MACRO)) {
 const localFilter = (code) =>
   code in SEGMENTED ||
   code === "DIAGNOSTICS_SCAN" ||
+  code === "ARCH_SCAN" ||
+  code === "ARCH_RESCAN" ||
   LOCAL_EXTRAS.includes(code);
 
 for (const [id, cfg] of Object.entries(CITY)) {

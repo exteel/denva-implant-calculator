@@ -19,16 +19,15 @@ export function StageRows({ priced, showMedian }: { priced: PricedScenario; show
             <span className="font-bold text-ink">{row.label}</span>{" "}
             <span className="hidden sm:inline">· {row.hint}</span>
           </span>
-          <span className="tabular font-bold whitespace-nowrap">{formatRange(row.range)}</span>
+          <span className="tabular ml-auto font-bold whitespace-nowrap">{formatRange(row.range)}</span>
         </span>
       ))}
       <span className="flex flex-wrap items-baseline justify-between gap-x-3 border-t border-dashed border-line pt-1.5">
         <span className="font-bold">Повне лікування</span>
-        <span className="tabular text-right font-extrabold">
+        <span className="tabular ml-auto text-right font-extrabold">
           <span className="whitespace-nowrap">{formatRange(priced.total)}</span>
           {showMedian && (
             <span className="block font-semibold whitespace-nowrap text-muted">
-              {" "}
               типова ~{formatUah(priced.total.median)}
             </span>
           )}

@@ -19,7 +19,7 @@ export const GEO_LEVEL_RANK: Record<GeoLevel, number> = {
 };
 
 export const MACROREGIONS: Macroregion[] = [
-  { id: "kyiv", name: "Київ" },
+  { id: "kyiv", name: "Київський регіон" },
   { id: "west", name: "Західний регіон" },
   { id: "center", name: "Центральний регіон" },
   { id: "north", name: "Північний регіон" },

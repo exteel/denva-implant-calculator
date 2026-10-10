@@ -125,11 +125,11 @@ describe("lookupPrice / geo fallback", () => {
     expect(r2.usedFallback).toBe(true);
   });
 
-  it("falls back per code, not per location (kyiv has no ARCH_SCAN at city level)", () => {
+  it("falls back per code, not per location (kyiv has no SEDATION at city level)", () => {
     expect(lookupPrice("IMPLANT_SURGICAL", "OPTIMAL", "kyiv", opts)!.scope.level).toBe("city");
-    const scan = lookupPrice("ARCH_SCAN", null, "kyiv", opts)!;
-    expect(scan.scope).toEqual({ level: "macroregion", id: "kyiv" });
-    expect(scan.usedFallback).toBe(true);
+    const sedation = lookupPrice("SEDATION", null, "kyiv", opts)!;
+    expect(sedation.scope).toEqual({ level: "macroregion", id: "kyiv" });
+    expect(sedation.usedFallback).toBe(true);
   });
 
   it("returns null when no record exists anywhere", () => {
@@ -360,16 +360,21 @@ describe("priceScenario — basket-record precedence & market meta", () => {
     expect(priceScenario(s, "kyiv", alignedPackage("OPTIMAL"), opts).source).toBe("composed");
   });
 
-  it("market meta aggregates across lines (kyiv full arch: ARCH_SCAN falls back to macroregion)", () => {
+  it("market meta: kyiv full arch is fully city-level (no fallback note for the capital)", () => {
     const p = priceScenario(scenarioOf("FULL_ARCH_AOX4"), "kyiv", alignedPackage("OPTIMAL"), opts);
-    expect(p.market.usedFallback).toBe(true);
-    expect(p.market.geoScope).toEqual({ level: "macroregion", id: "kyiv" });
+    expect(p.market.usedFallback).toBe(false);
+    expect(p.market.geoScope).toEqual({ level: "city", id: "kyiv" });
     expect(p.market.minN).toBe(45);
     expect(p.market.confidence).toBe("HIGH");
     expect(p.market.isDemo).toBe(true);
     expect(p.market.updatedAt).toBe("2026-09-01");
-    expect(p.lines.find((l) => l.code === "ARCH_SCAN")!.geoScope.level).toBe("macroregion");
-    expect(p.lines.find((l) => l.code === "IMPLANT_SURGICAL")!.geoScope.level).toBe("city");
+  });
+
+  it("market meta aggregates across lines (vinnytsia n=6 → centre macroregion)", () => {
+    const p = priceScenario(scenarioOf("FULL_ARCH_AOX4"), "vinnytsia", alignedPackage("OPTIMAL"), opts);
+    expect(p.market.usedFallback).toBe(true);
+    expect(p.market.geoScope).toEqual({ level: "macroregion", id: "center" });
+    expect(p.lines.every((l) => l.geoScope.level !== "city")).toBe(true);
   });
 
   it("stale oblast data lowers confidence and reports the oldest date", () => {
