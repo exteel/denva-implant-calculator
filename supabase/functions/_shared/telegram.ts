@@ -135,6 +135,18 @@ export type FetchLike = (
 export interface TelegramResult {
   ok: boolean;
   error?: string;
+  /** Telegram: звичайну групу перетворено на супергрупу — новий chat id (parameters.migrate_to_chat_id). */
+  migrateToChatId?: string;
+}
+
+/** Дістає parameters.migrate_to_chat_id з тіла помилки Telegram, якщо воно є. */
+export function parseMigrateToChatId(body: string): string | undefined {
+  try {
+    const id = (JSON.parse(body) as { parameters?: { migrate_to_chat_id?: unknown } })?.parameters?.migrate_to_chat_id;
+    return typeof id === "number" || (typeof id === "string" && /^-?\d+$/.test(id)) ? String(id) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Надсилає повідомлення. Токен ніколи не потрапляє в текст помилки. */
@@ -155,7 +167,8 @@ export async function sendTelegramMessage(
     });
     if (res.ok) return { ok: true };
     const body = await res.text().catch(() => "");
-    return { ok: false, error: scrub(`telegram http ${res.status}: ${body}`).slice(0, 500) };
+    const migrateToChatId = res.status === 400 ? parseMigrateToChatId(body) : undefined;
+    return { ok: false, error: scrub(`telegram http ${res.status}: ${body}`).slice(0, 500), migrateToChatId };
   } catch (e) {
     return { ok: false, error: scrub(`telegram request failed: ${(e as Error)?.message ?? String(e)}`).slice(0, 500) };
   }

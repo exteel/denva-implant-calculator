@@ -33,6 +33,9 @@ export interface LeadStore {
   insertLead(lead: LeadPayload): Promise<{ lead_id: string }>;
   getLead(id: string): Promise<StoredLead | null>;
   setTelegramStatus(id: string, status: "sent" | "failed", error?: string): Promise<void>;
+  /** Chat id, збережений після міграції групи в супергрупу (settings.telegram_chat_id_override). */
+  getChatIdOverride(): Promise<string | null>;
+  setChatIdOverride(chatId: string): Promise<void>;
 }
 
 export interface HandlerDeps {
@@ -123,12 +126,20 @@ export async function handleSubmitLead(req: HandlerRequest, deps: HandlerDeps): 
 }
 
 async function forward(leadId: string, lead: LeadPayload, deps: HandlerDeps): Promise<"sent" | "failed"> {
-  const { TELEGRAM_BOT_TOKEN: token, TELEGRAM_CHAT_ID: chatId } = deps.env;
+  const token = deps.env.TELEGRAM_BOT_TOKEN;
+  const override = await deps.store.getChatIdOverride().catch(() => null);
+  const chatId = override || deps.env.TELEGRAM_CHAT_ID;
   let result: TelegramResult;
   if (!token || !chatId) {
     result = { ok: false, error: "telegram not configured" };
   } else {
-    result = await deps.sendMessage(deps.fetch, token, chatId, deps.formatMessage(lead));
+    const text = deps.formatMessage(lead);
+    result = await deps.sendMessage(deps.fetch, token, chatId, text);
+    // Групу перетворено на супергрупу: запам'ятовуємо новий id і пробуємо ще раз (один раз)
+    if (!result.ok && result.migrateToChatId && result.migrateToChatId !== chatId) {
+      await deps.store.setChatIdOverride(result.migrateToChatId).catch(() => undefined);
+      result = await deps.sendMessage(deps.fetch, token, result.migrateToChatId, text);
+    }
   }
   try {
     await deps.store.setTelegramStatus(leadId, result.ok ? "sent" : "failed", result.error);

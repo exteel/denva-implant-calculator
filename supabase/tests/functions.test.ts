@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { LeadPayload as ContractLead, SubmitLeadResponse } from "../../src/lib/contracts";
-import { formatLeadMessage, escapeHtml, formatUah, sendTelegramMessage, isArchLead } from "../functions/_shared/telegram";
+import { formatLeadMessage, escapeHtml, formatUah, sendTelegramMessage, isArchLead, parseMigrateToChatId } from "../functions/_shared/telegram";
 import type { LeadPayload, FetchLike } from "../functions/_shared/telegram";
 import { validateLead } from "../functions/_shared/lead";
 import {
@@ -143,9 +143,10 @@ describe("handleSubmitLead", () => {
     created_at: new Date().toISOString(), ...over,
   });
 
-  function setup(opts: { tg?: "ok" | "fail" | "none"; rate?: boolean; row?: StoredLead | null; admin?: boolean } = {}) {
+  function setup(opts: { tg?: "ok" | "fail" | "none"; rate?: boolean; row?: StoredLead | null; admin?: boolean; override?: string | null; migrate?: boolean } = {}) {
     const statuses: { id: string; status: string; error?: string }[] = [];
     const sent: string[] = [];
+    const chats: string[] = [];
     const store: LeadStore = {
       insertLead: vi.fn(async () => {
         if (opts.rate) throw new RateLimitedError();
@@ -153,20 +154,24 @@ describe("handleSubmitLead", () => {
       }),
       getLead: vi.fn(async () => (opts.row === undefined ? stored() : opts.row)),
       setTelegramStatus: vi.fn(async (id, status, error) => { statuses.push({ id, status, error }); }),
+      getChatIdOverride: vi.fn(async () => opts.override ?? null),
+      setChatIdOverride: vi.fn(async () => undefined),
     };
     const deps: HandlerDeps = {
       store,
       validateLead,
       formatMessage: formatLeadMessage,
-      sendMessage: async (_f, _t, _c, text) => {
+      sendMessage: async (_f, _t, chat, text) => {
         sent.push(text);
+        chats.push(chat);
+        if (opts.migrate && chat === "c") return { ok: false, error: "telegram http 400", migrateToChatId: "-1001234567890" };
         return opts.tg === "fail" ? { ok: false, error: "telegram http 500" } : { ok: true };
       },
       fetch: async () => ({ ok: true, status: 200, text: async () => "" }),
       isAdmin: async () => Boolean(opts.admin),
       env: opts.tg === "none" ? {} : { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHAT_ID: "c" },
     };
-    return { deps, statuses, sent, store };
+    return { deps, statuses, sent, chats, store };
   }
   const post = (body: unknown, extra: Record<string, unknown> = {}) => ({ method: "POST", origin: "https://exteel.github.io", body, ...extra });
 
@@ -188,6 +193,39 @@ describe("handleSubmitLead", () => {
     expect(res.body).toMatchObject({ telegram: "failed" });
     expect(store.insertLead).toHaveBeenCalledOnce();
     expect(statuses[0]).toMatchObject({ status: "failed", error: "telegram http 500" });
+  });
+
+  it("групу мігровано в супергрупу: повтор з новим chat id і збереження override", async () => {
+    const { deps, chats, store, statuses } = setup({ migrate: true });
+    const res = await handleSubmitLead(post({ lead: lead() }), deps);
+    expect(res.body).toMatchObject({ telegram: "sent" });
+    expect(chats).toEqual(["c", "-1001234567890"]);
+    expect(store.setChatIdOverride).toHaveBeenCalledWith("-1001234567890");
+    expect(statuses[0].status).toBe("sent");
+  });
+
+  it("збережений override має пріоритет над секретом і міграція не зациклюється", async () => {
+    const a = setup({ override: "-1001234567890", migrate: true });
+    await handleSubmitLead(post({ lead: lead() }), a.deps);
+    expect(a.chats).toEqual(["-1001234567890"]);
+    expect(a.store.setChatIdOverride).not.toHaveBeenCalled();
+    // якщо новий chat id теж відповідає міграцією на себе — один повтор, без циклу
+    const b = setup({ migrate: true });
+    b.deps.sendMessage = async (_f, _t, chat) => { b.chats.push(chat); return { ok: false, error: "x", migrateToChatId: "-100999" }; };
+    const res = await handleSubmitLead(post({ lead: lead() }), b.deps);
+    expect(b.chats).toEqual(["c", "-100999"]);
+    expect(res.body).toMatchObject({ telegram: "failed" });
+  });
+
+  it("parseMigrateToChatId / sendTelegramMessage розпізнають migrate_to_chat_id", async () => {
+    const body = JSON.stringify({ ok: false, error_code: 400, description: "Bad Request: group chat was upgraded to a supergroup chat", parameters: { migrate_to_chat_id: -1001234567890 } });
+    expect(parseMigrateToChatId(body)).toBe("-1001234567890");
+    expect(parseMigrateToChatId("not json")).toBeUndefined();
+    expect(parseMigrateToChatId("{}")).toBeUndefined();
+    const f: FetchLike = async () => ({ ok: false, status: 400, text: async () => body });
+    expect(await sendTelegramMessage(f, "T", "-5583246047", "hi")).toMatchObject({ ok: false, migrateToChatId: "-1001234567890" });
+    const f403: FetchLike = async () => ({ ok: false, status: 403, text: async () => body });
+    expect((await sendTelegramMessage(f403, "T", "c", "hi")).migrateToChatId).toBeUndefined();
   });
 
   it("немає секретів → failed з «telegram not configured»", async () => {

@@ -542,6 +542,10 @@ export const listPublishedHistory = (cityId: string, serviceCode: string, tier: 
 export const listLeads = (limit = 200) =>
   unwrapList<Lead>(db().from("leads").select("*").order("created_at", { ascending: false }).limit(limit));
 
+/** All leads for the dashboard (aggregated client-side). Newest first, capped at 5000. */
+export const listLeadsForDashboard = () =>
+  unwrapList<Lead>(db().from("leads").select("*").order("created_at", { ascending: false }).limit(5000));
+
 /** ТЗ §6.3: re-send to Telegram through the same Edge Function. */
 export async function retryLead(leadId: string): Promise<SubmitLeadResponse> {
   const { data, error } = await db().functions.invoke<SubmitLeadResponse>("submit-lead", { body: { retry_lead_id: leadId } });

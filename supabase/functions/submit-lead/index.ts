@@ -28,6 +28,14 @@ const store = {
     if (error) throw new Error(error.message);
     return data;
   },
+  async getChatIdOverride() {
+    const { data } = await supabase.from("settings").select("telegram_chat_id_override").maybeSingle();
+    return data?.telegram_chat_id_override ?? null;
+  },
+  async setChatIdOverride(chatId) {
+    const { error } = await supabase.from("settings").update({ telegram_chat_id_override: chatId }).eq("id", true);
+    if (error) throw new Error(error.message);
+  },
   async setTelegramStatus(id, status, errorText) {
     const { error } = await supabase.rpc("update_lead_telegram_status", {
       p_lead_id: id,

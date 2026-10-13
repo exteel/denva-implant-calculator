@@ -10,6 +10,7 @@ import { describeError } from "./helpers";
 import { Button, Notice, TextField, useAction } from "./ui";
 
 const NAV: ReadonlyArray<{ href: string; label: string }> = [
+  { href: "/admin/leads-dashboard/", label: "Дашборд заявок" },
   { href: "/admin/", label: "Огляд" },
   { href: "/admin/cities/", label: "Міста та регіони" },
   { href: "/admin/clinics/", label: "Клініки" },
@@ -129,7 +130,8 @@ function SignIn() {
 function Frame({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const pathname = usePathname() ?? "/admin/";
-  const isActive = (href: string) => (href === "/admin/" ? pathname === "/admin/" || pathname === "/admin" : pathname.startsWith(href.slice(0, -1)));
+  const current = pathname.endsWith("/") ? pathname : `${pathname}/`;
+  const isActive = (href: string) => (href === "/admin/" ? current === "/admin/" : current.startsWith(href));
 
   return (
     <div className="min-h-dvh lg:flex">

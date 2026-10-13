@@ -116,3 +116,14 @@ describe("import_clinic_prices: повторне використання клі
     expect(await rows(db, "select 1 from clinics")).toHaveLength(1);
   });
 });
+
+describe("settings.telegram_chat_id_override (міграція 07)", () => {
+  it("service_role читає/пише override; зміна не ставить перерахунок у чергу", async () => {
+    await withRole(db, "service_role", undefined, async () => {
+      await db.exec("update settings set telegram_chat_id_override = '-1001234567890' where id = true");
+      expect(await scalar(db, "select telegram_chat_id_override from settings")).toBe("-1001234567890");
+    });
+    expect(await scalar(db, "select count(*)::int from recalc_queue")).toBe(0);
+    await expect(withRole(db, "anon", undefined, () => db.query("select telegram_chat_id_override from settings"))).rejects.toThrow(/permission denied/);
+  });
+});
