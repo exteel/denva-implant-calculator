@@ -5,7 +5,7 @@ export function Logo({ href = "/" }: { href?: string }) {
     <Link
       href={href}
       className="inline-flex items-center gap-2 text-ink no-underline"
-      aria-label="Denva — на головну"
+      aria-label="DENVA AI — на головну"
     >
       <span
         aria-hidden
@@ -13,7 +13,9 @@ export function Logo({ href = "/" }: { href?: string }) {
       >
         D
       </span>
-      <span className="text-[17px] font-extrabold tracking-[0.18em]">DENVA</span>
+      <span className="text-[17px] font-extrabold tracking-[0.18em]">
+        DENVA <span className="text-brand">AI</span>
+      </span>
     </Link>
   );
 }

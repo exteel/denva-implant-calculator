@@ -1,7 +1,22 @@
-import type { AnalyticsEvent } from "@/engine/types";
+/** DENVA AI v2 calculator funnel events. */
+export type AnalyticsEvent =
+  | "calculator_started"
+  | "city_selected"
+  | "scope_selected"
+  | "teeth_count_selected"
+  | "followup_answered"
+  | "result_viewed"
+  | "tier_card_selected"
+  | "tier_toggled"
+  | "all_on_selected"
+  | "params_changed"
+  | "lead_cta_clicked"
+  | "lead_submitted"
+  | "lead_failed"
+  | "lead_retry";
 
 /**
- * ТЗ §19 analytics. Events go to `window.dataLayer` so Google Tag Manager
+ * Calculator analytics. Events go to `window.dataLayer` so Google Tag Manager
  * (or any tag manager) can be attached later without code changes.
  */
 

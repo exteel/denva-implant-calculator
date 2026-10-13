@@ -25,10 +25,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npx tsc --noEmit -p supabase/tsconfig.json
       - run: npm test
       - run: npm run build
         env:
           NEXT_PUBLIC_BASE_PATH: /denva-implant-calculator
+          # Public by design (access is enforced by RLS). Set them in
+          # GitHub → Settings → Secrets and variables → Actions → Variables.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
       - run: touch out/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
