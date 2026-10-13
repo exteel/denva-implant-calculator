@@ -42,3 +42,4 @@ next-env.d.ts
 out/
 /test-results/
 /playwright-report/
+supabase/.temp/
