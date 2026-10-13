@@ -13,11 +13,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "next": "15.5.27",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "read-excel-file": "^9.3.12",
+    "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.9",
     "@eslint/eslintrc": "^3",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4",
@@ -31,6 +35,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.27",
     "jsdom": "^29.1.1",
+    "supabase": "^2.120.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.7"
