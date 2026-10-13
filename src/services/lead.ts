@@ -1,6 +1,7 @@
 import type { LeadIntent, LeadPayload, LocationKind, PatientTier } from "@/lib/contracts";
 import type { Answers, Calculation, Params } from "@/engine/v2";
 import { scenarioLabel } from "@/engine/v2";
+import { FOLLOW_UPS, SCOPE_OPTIONS, SCOPE_QUESTION } from "@/engine/v2/flow";
 
 /** UTM / click-id tags of the landing URL, kept for attribution (ТЗ §6.3). */
 export function readUtm(search: string): Record<string, string> {
@@ -40,10 +41,20 @@ export interface LeadContext {
 /** ТЗ §6.3: what the central Telegram team (and later Planfix) receives. */
 export function buildLeadPayload(ctx: LeadContext): LeadPayload {
   const { params, calculation, answers } = ctx;
+  // Human-readable "question → answer" for the Telegram team; the
+  // machine-readable form travels in `scenario`.
   const answerMap: Record<string, string | number> = {};
-  if (answers.scope) answerMap.scope = answers.scope;
-  if (answers.scope === "individual" && answers.count !== undefined) answerMap.teeth_count = answers.count;
-  if (answers.followUp) answerMap[answers.followUp.id] = answers.followUp.value;
+  if (answers.scope) {
+    answerMap[SCOPE_QUESTION.title] =
+      SCOPE_OPTIONS.find((o) => o.id === answers.scope)?.label ?? answers.scope;
+  }
+  if (answers.scope === "individual" && answers.count !== undefined) {
+    answerMap["Кількість зубів"] = answers.count >= 7 ? "7+" : answers.count;
+  }
+  if (answers.followUp) {
+    const q = FOLLOW_UPS[answers.followUp.id];
+    answerMap[q.title] = q.options.find((o) => o.id === answers.followUp?.value)?.label ?? answers.followUp.value;
+  }
 
   const scenario: Record<string, unknown> = {
     kind: calculation.kind,

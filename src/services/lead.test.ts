@@ -40,7 +40,7 @@ describe("lead helpers", () => {
       intent: "refine",
       phone: "+380501234567",
       scenario_label: "Усі зуби на одній щелепі · All-on-4",
-      answers: { scope: "one_jaw", jaw_state: "no_teeth" },
+      answers: { "Які зуби потрібно замінити імплантами?": "Усі зуби на одній щелепі", "Яка зараз ситуація?": "Зубів немає" },
       implant_tier: "classic",
       crown_or_arch_tier: "premium",
       total_uah: 137500,
