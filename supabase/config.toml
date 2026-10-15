@@ -427,3 +427,7 @@ entrypoint = "./functions/submit-lead/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/nbu-rate/index.ts"
+
+[functions.telegram-bot]
+enabled = true
+verify_jwt = false

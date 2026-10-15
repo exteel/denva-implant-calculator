@@ -111,3 +111,8 @@ $$);
 - Журнал змін: `audit_log` (автор, таблиця, старе/нове значення, причина); історія опублікованих цін — `published_price_history`;
   snapshot-и агрегатів — `city_aggregates` (лише додаються).
 - Тести SQL: `npx vitest run supabase` (Docker не потрібен). Типи: `npx tsc --noEmit -p supabase/tsconfig.json`.
+
+## Бот відповідає на /start (telegram-bot)
+
+`telegram-bot` — webhook бота: у приватному чаті пояснює, що заявки надходять у групу «DENVA — заявки»; у групі відповідає лише на /start і /help.
+Після зміни токена бота перереєструйте webhook: відкрийте `https://<project>.supabase.co/functions/v1/telegram-bot?setup=1`.
