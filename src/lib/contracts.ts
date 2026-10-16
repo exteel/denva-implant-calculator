@@ -1,21 +1,22 @@
 /**
- * DENVA AI v2 — shared contracts between the Supabase backend
- * (`supabase/`), the patient calculator (`src/engine/v2`,
- * `src/components/calculator`) and the admin panel (`src/app/admin`).
- * Spec: docs/TZ_v2_DENVA_AI.txt · design: docs/ARCHITECTURE_v2.md.
+ * DENVA AI v3 (ТЗ 3.3) — shared contracts between the Supabase backend
+ * (`supabase/`), the calculation engine (`src/engine/v3`), the patient
+ * calculator (`src/components/calculator`), the SEO pages
+ * (`src/app/implant-calculator`) and the admin panel (`src/app/admin`).
+ * Spec: docs/TZ_v3.3_DENVA_AI.txt · design: docs/ARCHITECTURE_v3.md.
  *
  * Changing anything here is a cross-team change: the SQL in
  * `supabase/migrations` must stay in sync.
  */
 
-// ───────────────────────── Catalog ─────────────────────────
+// ───────────────────────── Catalog (ТЗ §4, шаблон «Довідник кодів») ─────────────────────────
 
-/** ТЗ §3.2 / §7.4: "Спільний" + the three patient-facing levels. */
+/** "Спільний" + the three patient-facing levels. */
 export type Tier = "common" | "minimum" | "classic" | "premium";
 export type PatientTier = Exclude<Tier, "common">;
 export const PATIENT_TIERS: readonly PatientTier[] = ["minimum", "classic", "premium"];
 
-/** ТЗ §4 roles. Only implant, crown and arch_final are tiered. */
+/** ТЗ §4 roles. */
 export type ServiceRole =
   | "implant"
   | "healing"
@@ -23,40 +24,66 @@ export type ServiceRole =
   | "superstructure"
   | "crown"
   | "temporary"
+  | "final_abutment"
   | "multiunit"
-  | "arch_temp"
-  | "arch_final"
+  | "arch"
+  | "diagnostic"
+  | "removal"
   | "addon";
 
-/** Canonical service codes seeded by the backend (ТЗ §4). */
+/** Which patient level drives a tiered service's tier (ТЗ §4, §9). */
+export type TierSource = "implant_tier" | "crown_or_arch_tier" | "common";
+
+/**
+ * Canonical service codes — exactly the codes of the clinic template
+ * (public/templates/DENVA_shablon_tsin_kliniki.xlsx, sheet «Довідник кодів»).
+ */
 export const SERVICE_CODES = {
   IMPLANT_INSTALL: "IMPLANT_INSTALL",
   HEALING_ABUTMENT: "HEALING_ABUTMENT",
-  SCAN_BOTH: "SCAN_BOTH",
+  SCAN_JAW_STAGE: "SCAN_JAW_STAGE",
+  REPEAT_SCAN_JAW: "REPEAT_SCAN_JAW",
   SUPERSTRUCTURE_SET: "SUPERSTRUCTURE_SET",
   CROWN_IMPLANT: "CROWN_IMPLANT",
   TEMP_CROWN_UNIT: "TEMP_CROWN_UNIT",
+  ABUTMENT_FINAL: "ABUTMENT_FINAL",
   MULTIUNIT: "MULTIUNIT",
   ARCH_TEMP: "ARCH_TEMP",
   ARCH_FINAL: "ARCH_FINAL",
-  // addons — never in the total (ТЗ §4, §5.4)
-  EXTRACTION_SIMPLE: "EXTRACTION_SIMPLE",
-  EXTRACTION_COMPLEX: "EXTRACTION_COMPLEX",
-  AUGMENT: "AUGMENT",
-  SINUS: "SINUS",
+  // additional — never in the total (ТЗ §5.5, §6.1)
+  IMPLANT_CONSULT: "IMPLANT_CONSULT",
+  CT_ONE_JAW: "CT_ONE_JAW",
+  CT_BOTH_JAWS: "CT_BOTH_JAWS",
+  REMOVAL_SIMPLE: "REMOVAL_SIMPLE",
+  REMOVAL_COMPLEX: "REMOVAL_COMPLEX",
+  REMOVAL_WISDOM_SIMPLE: "REMOVAL_WISDOM_SIMPLE",
+  REMOVAL_WISDOM_COMPLEX: "REMOVAL_WISDOM_COMPLEX",
+  REMOVAL_RESORCIN: "REMOVAL_RESORCIN",
+  REMOVAL_IMPACTED: "REMOVAL_IMPACTED",
+  ANESTHESIA_AREA: "ANESTHESIA_AREA",
+  SUTURE_AREA: "SUTURE_AREA",
+  HEMOSTATIC_SPONGE: "HEMOSTATIC_SPONGE",
+  AUGMENT_SEGMENT: "AUGMENT_SEGMENT",
+  SINUS_LIFT: "SINUS_LIFT",
   SOFT_TISSUE: "SOFT_TISSUE",
-  SEDATION: "SEDATION",
-  SURGICAL_GUIDE: "SURGICAL_GUIDE",
+  SEDATION_30_MIN: "SEDATION_30_MIN",
+  SURGICAL_GUIDE_STANDARD: "SURGICAL_GUIDE_STANDARD",
+  CEMENT_RESTORATION_REMOVAL: "CEMENT_RESTORATION_REMOVAL",
 } as const;
 export type ServiceCode = (typeof SERVICE_CODES)[keyof typeof SERVICE_CODES] | (string & {});
 
 export interface PublicService {
   service_code: ServiceCode;
   name: string;
+  /** Template «Категорія», e.g. "Імплантація", "Видалення". */
+  category: string;
   role: ServiceRole;
-  /** e.g. "за імплант", "за зуб", "за щелепу", "за етап", "за годину". */
+  /** e.g. "за імплант", "за зуб", "за щелепу/етап", "за 30 хвилин". */
   unit: string;
   tiered: boolean;
+  tier_source: TierSource;
+  /** true for diagnostic/removal/addon — shown in «Що може знадобитися додатково», never in total. */
+  additional: boolean;
   included_text: string | null;
   sort: number;
 }
@@ -65,44 +92,58 @@ export interface PublicService {
 
 export type LocationKind = "city" | "region";
 
+/** ТЗ §11.3. */
+export type SeoStatus = "draft" | "review" | "published" | "stale" | "removed";
+
 export interface PublicLocation {
   kind: LocationKind;
   id: string;
+  /** URL slug for /implant-calculator/{slug}/ (cities; equals id by default). */
+  slug: string;
   name: string;
-  /** For cities: the region used as fallback. */
+  /** For cities: the oblast used as baseline fallback. */
   region_id: string | null;
   region_name: string | null;
   aliases: string[];
 }
 
-// ───────────────────────── Published prices (ТЗ §2.2–2.3, §8) ─────────────────────────
+// ───────────────────────── Published prices (ТЗ §2.2–2.3, §3, §8) ─────────────────────────
 
-export type SourceType = "aggregate" | "manual" | "manual_override" | "regional_fallback";
+export type SourceType =
+  | "aggregate"
+  | "hybrid"
+  | "manual_baseline"
+  | "manual_override"
+  | "regional_fallback"
+  | "national_fallback";
+
+export type GeoScope = "city" | "region" | "country";
 
 export interface PublicPrice {
   service_code: ServiceCode;
   tier: Tier;
-  /** In `currency` (UAH for Ukraine). */
+  /** UAH, not rounded (rounding is display-only — ТЗ §8.1). */
   value: number;
-  currency: string;
+  currency: "UAH";
   source_type: SourceType;
-  /** Number of clinics behind an aggregate; null for manual / fallback. */
-  clinic_count: number | null;
-  /** When the aggregate snapshot was computed; null for manual values. */
+  /** Where the published value effectively comes from. */
+  source_scope: GeoScope;
+  /** Verified local clinics in the sample (one vote per clinic / network price). */
+  local_clinic_count: number;
+  /** Scope of the baseline used (null for pure aggregate / override). */
+  baseline_scope: GeoScope | null;
+  /** Hybrid weights, e.g. {local: 1/3, baseline: 2/3}; null when not blended. */
+  blend_weights: { local: number; baseline: number } | null;
   calculated_at: string | null;
   published_at: string;
-  /** Seed/demo values — the UI must label them. */
   is_demo: boolean;
 }
 
-/**
- * RPC `public.get_location_prices(p_kind text, p_id text)` (anon-callable).
- * Returns only PUBLISHED values — never clinic prices or clinic names.
- */
+/** RPC `public.get_location_prices(p_kind text, p_id text)` (anon-callable). */
 export interface LocationPricesResponse {
   location: PublicLocation;
-  currency: string;
-  /** NBU UAH per 1 EUR with its date, for the second-currency line (ТЗ §4.4). */
+  currency: "UAH";
+  /** NBU UAH per 1 EUR with its date (ТЗ §4.7). */
   eur_rate: { rate: number; date: string } | null;
   services: PublicService[];
   prices: PublicPrice[];
@@ -111,26 +152,127 @@ export interface LocationPricesResponse {
 /** RPC `public.list_locations()` (anon-callable): active cities + regions. */
 export type ListLocationsResponse = PublicLocation[];
 
+// ───────────────────────── Calculation (ТЗ §4, §8.1) ─────────────────────────
+
+export type Jaw = "upper" | "lower";
+export type ToothLocation = "adjacent" | "separate" | "unknown";
+export type ToothStatus =
+  | "removed"
+  | "partly_present"
+  | "extraction_recommended"
+  | "implants_installed"
+  | "unknown";
+/** Scenario chosen for a 7–14-teeth jaw (tabs Мости / All-on-4/6/8). */
+export type JawScenarioChoice = "bridges" | "aox4" | "aox6" | "aox8";
+
+export interface JawInput {
+  jaw: Jaw;
+  /** 0–14; 0 = this jaw is not treated (wisdom teeth excluded). */
+  tooth_count: number;
+  /** Asked for 2–6 teeth only. */
+  location: ToothLocation | null;
+  status: ToothStatus;
+  /** Only when status = implants_installed. */
+  installed_implant_count: number | "unknown" | null;
+  /** 7–14 teeth: the selected tab (default "bridges"). */
+  scenario: JawScenarioChoice | null;
+  implant_tier: PatientTier;
+  crown_or_arch_tier: PatientTier;
+  include_temporary: boolean;
+}
+
+export interface MoneyRange {
+  /** UAH, unrounded. Equal when the answer is exact. */
+  low: number;
+  high: number;
+}
+
+export type JawScenarioKind =
+  | "single"
+  | "adjacent"
+  | "separate"
+  | "adjacent_or_separate"
+  | "installed"
+  | "bridges"
+  | "aox4"
+  | "aox6"
+  | "aox8"
+  | "reference_single";
+
+export interface CalcComponent {
+  service_code: ServiceCode;
+  tier: Tier;
+  quantity: { low: number; high: number };
+  unit_value: number;
+  total: MoneyRange;
+  stage: "first" | "permanent" | "temporary" | null;
+}
+
+export interface ScenarioSummary {
+  scenario: JawScenarioKind;
+  implant_count: { low: number; high: number };
+  prosthetic_units: number;
+  first_stage: MoneyRange | null;
+  permanent_stage: MoneyRange | null;
+  total: MoneyRange;
+}
+
+export interface JawCalculation extends ScenarioSummary {
+  jaw: Jaw;
+  tooth_count: number;
+  components: CalcComponent[];
+  /** 7–14: all four scenarios for the comparison strip (incl. the selected one). */
+  alternatives: ScenarioSummary[];
+  /** Codes with no published price — the jaw total is then unavailable. */
+  missing_codes: ServiceCode[];
+}
+
+export interface PriceMeta {
+  currency: "UAH";
+  eur_rate: { rate: number; date: string } | null;
+  /** Weakest source across the used prices (ТЗ §6.1 label). */
+  source_scope: GeoScope;
+  baseline_scope: GeoScope | null;
+  /** Smallest local clinic count across the main tiered lines. */
+  local_clinic_count: number;
+  blend_weights: { local: number; baseline: number } | null;
+  /** Oldest calculated_at/published_at among used prices. */
+  calculated_at: string | null;
+  is_demo: boolean;
+}
+
+/** Edge Function `POST /functions/v1/calculate` body (ТЗ §8.1). */
+export interface CalculateRequest {
+  location: { kind: LocationKind; id: string };
+  upperJawInput: JawInput | null;
+  lowerJawInput: JawInput | null;
+}
+
+export interface CalculateResponse {
+  upperJawCalculation: JawCalculation | null;
+  lowerJawCalculation: JawCalculation | null;
+  /** upper.total + lower.total, no hidden adjustments. */
+  overallTotal: MoneyRange | null;
+  priceMeta: PriceMeta;
+}
+
 // ───────────────────────── Leads (ТЗ §6.3) ─────────────────────────
 
-export type LeadIntent = "refine" | "send_calculation";
+export type LeadIntent = "dental_tender" | "refine";
 
 export interface LeadPayload {
   intent: LeadIntent;
   phone: string;
   location: { kind: LocationKind; id: string; name: string };
-  /** Machine-readable scenario, e.g. { kind: "teeth", count: 3, arrangement: "adjacent" }. */
-  scenario: Record<string, unknown>;
-  /** Human-readable scenario line for Telegram, e.g. "3 зуби поруч (міст)". */
-  scenario_label: string;
+  /** Human-readable "question → answer" pairs. */
   answers: Record<string, string | number>;
-  implant_tier: PatientTier;
-  crown_or_arch_tier: PatientTier;
-  /** Main figure in UAH (first stage for full arch). */
-  total_uah: number | null;
-  /** Full arch only. */
-  full_treatment_uah?: number | null;
-  /** e.g. "на основі прайсів 4 клінік" / "статистичний орієнтир Denva". */
+  scenario_label: string;
+  upperJawInput: JawInput | null;
+  lowerJawInput: JawInput | null;
+  upperJawCalculation: JawCalculation | null;
+  lowerJawCalculation: JawCalculation | null;
+  overallTotal: MoneyRange | null;
+  /** ТЗ §6.1 source sentence shown to the patient. */
   price_source: string;
   page_url: string;
   utm: Record<string, string>;
@@ -139,20 +281,45 @@ export interface LeadPayload {
 
 /**
  * Edge Function `POST /functions/v1/submit-lead`.
- * Body: `{ lead: LeadPayload }` or `{ retry_lead_id: string }` (re-send to Telegram).
- * The lead is stored first, then forwarded; a Telegram failure never loses it.
+ * Body: `{ lead: LeadPayload }` or `{ retry_lead_id: string }`.
  */
 export interface SubmitLeadResponse {
   lead_id: string;
   telegram: "sent" | "failed";
 }
 
+// ───────────────────────── SEO city pages (ТЗ §11) ─────────────────────────
+
+export interface CityPageContent {
+  /** Short unique intro (no keyword lists). */
+  intro: string | null;
+  /** Visible local FAQ; FAQPage JSON-LD only from these. */
+  faq: Array<{ q: string; a: string }>;
+  /** Market notes that make the page genuinely local. */
+  local_notes: string | null;
+  reviewer_name: string | null;
+  reviewer_url: string | null;
+  reviewed_at: string | null;
+}
+
+/** RPC `public.get_city_pages()` (anon) — build-time data for every non-draft city. */
+export interface CityPageData {
+  location: PublicLocation;
+  seo_status: SeoStatus;
+  content: CityPageContent;
+  prices: PublicPrice[];
+  services: PublicService[];
+  eur_rate: { rate: number; date: string } | null;
+  /** Last substantial price/content change (sitemap lastmod). */
+  updated_at: string;
+}
+
 // ───────────────────────── Admin (RLS: admins only) ─────────────────────────
 
-export type PriceMode = "auto" | "manual" | "manual_override";
+export type PriceMode = "auto" | "manual_override";
 export type ClinicStatus = "draft" | "active" | "excluded";
 export type ClinicPriceStatus = "pending" | "approved" | "rejected" | "stale";
-export type AggregationMethod = "median" | "arithmetic_mean";
+export type AggregationMethod = "median";
 
 /** View `public.admin_price_matrix` — one row per city × service × tier. */
 export interface AdminPriceMatrixRow {
@@ -162,16 +329,18 @@ export interface AdminPriceMatrixRow {
   service_name: string;
   tier: Tier;
   mode: PriceMode;
-  manual_value: number | null;
-  region_value: number | null;
-  aggregate_value: number | null;
-  aggregate_clinic_count: number | null;
-  aggregate_calculated_at: string | null;
-  aggregate_method: AggregationMethod | null;
+  override_value: number | null;
+  city_baseline: number | null;
+  region_baseline: number | null;
+  country_baseline: number | null;
+  local_clinic_count: number;
+  local_median: number | null;
+  baseline_value: number | null;
+  baseline_scope: GeoScope | null;
+  blend_weights: { local: number; baseline: number } | null;
   published_value: number | null;
   published_source_type: SourceType | null;
   published_at: string | null;
-  min_clinics: number;
 }
 
 /** RPC `public.admin_aggregate_detail(p_city_id, p_service_code, p_tier)`. */
@@ -179,46 +348,55 @@ export interface AggregateDetail {
   snapshot: {
     id: string;
     value: number | null;
-    clinic_count: number;
-    method: AggregationMethod;
+    local_clinic_count: number;
+    local_median: number | null;
+    baseline_value: number | null;
+    baseline_scope: GeoScope | null;
+    blend_weights: { local: number; baseline: number } | null;
+    formula: string;
     calculated_at: string;
   } | null;
   included: Array<{ clinic_price_id: string; clinic_id: string; clinic_name: string; value_uah: number; valid_from: string | null }>;
   excluded: Array<{ clinic_price_id: string; clinic_id: string; clinic_name: string; value_uah: number | null; reason: string }>;
 }
 
-/** One normalised row from the "DENVA шаблон цін клініки" Excel file (ТЗ §7.4). */
+/** One row of the «Прайс клініки» sheet (from row 16). */
 export interface ImportPriceRow {
   row_number: number;
-  offer_name: string;
-  brand_material: string | null;
+  service_code: string | null;
+  category: string | null;
+  service_name: string | null;
+  unit: string | null;
+  tier: Tier | null;
   price_from: number | null;
   price_to: number | null;
   currency: string;
   included_text: string | null;
   exclusions: string | null;
-  source: string | null;
-  /** Filled by DENVA moderators; may be empty on import. */
-  service_code: string | null;
-  tier: Tier | null;
+  valid_from: string | null;
+  note: string | null;
 }
 
-/** RPC `public.import_clinic_prices(p_payload jsonb)` input. */
+/** RPC `public.import_clinic_prices(p_payload jsonb)` input — the clinic card (rows 3–12). */
 export interface ImportPayload {
   file_name: string;
   clinic: {
-    /** Existing clinic, or null to create a draft clinic from the card below. */
+    /** Existing clinic, or null → reuse by city + name, else create a draft clinic. */
     clinic_id: string | null;
     name: string;
     city_id: string;
+    region: string | null;
+    address: string | null;
+    contact_person: string | null;
     contacts: string | null;
     valid_from: string | null;
-    currency: string;
+    dental_tender: boolean;
+    public_profile_consent: boolean;
+    data_confirmed: boolean;
   };
   rows: ImportPriceRow[];
 }
 
-/** RPC `public.import_clinic_prices` output — the import protocol (ТЗ §8). */
 export interface ImportReport {
   batch_id: string;
   clinic_id: string;
@@ -226,6 +404,8 @@ export interface ImportReport {
   errors: Array<{ row_number: number; message: string }>;
   duplicates: number[];
   unknown_service_code: number[];
+  /** Rows without a price — allowed and skipped (template instruction 5). */
+  skipped_empty: number[];
   /** Every accepted row starts as "На перевірці" (status pending). */
   pending_moderation: number[];
 }
