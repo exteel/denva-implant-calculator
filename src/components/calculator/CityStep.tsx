@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useState } from "react";
 import type { PublicLocation } from "@/lib/contracts";
-import { listRegions, searchCities } from "@/engine/v2";
+import { listRegions, searchCities } from "./search";
 import { StepHeading } from "./StepHeading";
 import { UnavailableState } from "./UnavailableState";
 import type { Loadable } from "./useCalculatorData";
@@ -10,11 +10,14 @@ import type { Loadable } from "./useCalculatorData";
 interface Props {
   locations: Loadable<PublicLocation[]>;
   onRetry: () => void;
+  /** Picking a city moves on automatically (ТЗ §5.1). */
   onSelect: (location: PublicLocation) => void;
+  /** Shown instead of the title when the picker was opened to change the city. */
+  changing?: boolean;
 }
 
 /** ТЗ §5.1: the list appears only after 1–2 letters; no city → pick an oblast. */
-export function CityStep({ locations, onRetry, onSelect }: Props) {
+export function CityStep({ locations, onRetry, onSelect, changing = false }: Props) {
   const [query, setQuery] = useState("");
   const [pickRegion, setPickRegion] = useState(false);
   const inputId = useId();
@@ -25,10 +28,11 @@ export function CityStep({ locations, onRetry, onSelect }: Props) {
 
   return (
     <div>
-      <StepHeading focus={false}>Калькулятор імплантації</StepHeading>
+      <StepHeading focus={changing}>{changing ? "Оберіть місто лікування" : "Калькулятор імплантації"}</StepHeading>
       <p className="mt-2 text-[16px] leading-relaxed text-ink-soft">
         Дізнайтеся орієнтовну вартість імплантації у вашому місті
       </p>
+      <p className="mt-1 text-[14px] leading-relaxed text-muted">Без реєстрації. Результат одразу після відповідей</p>
 
       {locations.status === "error" ? (
         <UnavailableState unavailable={locations.unavailable} onRetry={onRetry} />
@@ -61,9 +65,7 @@ export function CityStep({ locations, onRetry, onSelect }: Props) {
                   >
                     <span>
                       {city.name}
-                      {city.region_name && (
-                        <span className="block text-sm font-medium text-muted">{city.region_name}</span>
-                      )}
+                      {city.region_name && <span className="block text-sm font-medium text-muted">{city.region_name}</span>}
                     </span>
                     <span aria-hidden className="text-muted">
                       →
@@ -83,7 +85,7 @@ export function CityStep({ locations, onRetry, onSelect }: Props) {
             onClick={() => setPickRegion(true)}
             className="mt-4 text-[15px] font-bold text-brand underline-offset-4 hover:underline"
           >
-            Немає мого міста — оберіть область
+            Не знайшли своє місто? Оберіть область
           </button>
         </>
       ) : (

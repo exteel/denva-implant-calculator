@@ -111,7 +111,7 @@ export default function LeadsDashboardPage() {
                 <Tile label="Сьогодні">
                   <p className="text-3xl font-extrabold">{summary.today.toLocaleString("uk-UA")}</p>
                 </Tile>
-                <Tile label="Середня сума розрахунку" footer={<span className="text-muted">за заявками з розрахованою сумою</span>}>
+                <Tile label="Середня загальна вартість" footer={<span className="text-muted">за заявками з розрахунком (середина діапазону)</span>}>
                   <p className="text-3xl font-extrabold">{summary.avgTotalUah === null ? "—" : formatMoney(summary.avgTotalUah, "UAH")}</p>
                 </Tile>
                 <Tile
@@ -154,9 +154,10 @@ export default function LeadsDashboardPage() {
 
               <div className="grid gap-5 lg:grid-cols-2">
                 <Breakdown title="За містами" firstColumn="Місто" rows={parts.cities} />
-                <Breakdown title="За сценаріями" firstColumn="Сценарій" rows={parts.scenarios} />
+                <Breakdown title="За щелепами" subtitle="Верхня, нижня або обидві" firstColumn="Щелепи" rows={parts.scenarios} />
+                <Breakdown title="За схемами лікування" subtitle="Кожна щелепа рахується окремо" firstColumn="Схема" rows={parts.schemes} />
                 <Breakdown title="За типом запиту" firstColumn="Тип запиту" rows={parts.intents} />
-                <Breakdown title="За рівнями" subtitle="Рівень імпланта / рівень коронки або конструкції" firstColumn="Імплант / коронка" rows={parts.tiers} />
+                <Breakdown title="За рівнями" subtitle="Рівень імпланта / рівень коронки або конструкції (однаковий для обох щелеп)" firstColumn="Імплант / коронка" rows={parts.tiers} />
                 <Breakdown title="За джерелом трафіку" subtitle="utm_source" firstColumn="Джерело" rows={parts.sources} />
               </div>
             </div>

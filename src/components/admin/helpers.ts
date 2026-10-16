@@ -1,4 +1,15 @@
-import type { AggregationMethod, ClinicPriceStatus, ClinicStatus, PriceMode, ServiceRole, SourceType, Tier } from "@/lib/contracts";
+import type {
+  AggregationMethod,
+  ClinicPriceStatus,
+  ClinicStatus,
+  GeoScope,
+  PriceMode,
+  SeoStatus,
+  ServiceRole,
+  SourceType,
+  Tier,
+  TierSource,
+} from "@/lib/contracts";
 
 // ───────────── labels ─────────────
 
@@ -25,21 +36,37 @@ export const PRICE_STATUS_LABEL: Record<ClinicPriceStatus, string> = {
 };
 
 export const MODE_LABEL: Record<PriceMode, string> = {
-  auto: "Авто (агрегат)",
-  manual: "Ручний",
-  manual_override: "Ручний (override)",
+  auto: "Авто (за формулою)",
+  manual_override: "Ручне значення (override)",
 };
 
+/** ТЗ §2.2 — all six publication modes. */
 export const SOURCE_LABEL: Record<SourceType, string> = {
-  aggregate: "Агрегат клінік",
-  manual: "Ручний орієнтир",
+  aggregate: "Медіана клінік (3+)",
+  hybrid: "Гібрид (клініки + базова)",
+  manual_baseline: "Базовий орієнтир міста",
   manual_override: "Ручний override",
-  regional_fallback: "Регіональний fallback",
+  regional_fallback: "Орієнтир області",
+  national_fallback: "Орієнтир України",
+};
+
+export const SOURCE_HELP: Record<SourceType, string> = {
+  aggregate: "3 і більше перевірених клінік — публікується медіана їхніх цін.",
+  hybrid: "1–2 перевірені клініки змішуються з базовим орієнтиром.",
+  manual_baseline: "Немає локальних клінік — публікується ручний орієнтир міста.",
+  manual_override: "Адміністратор тимчасово зафіксував значення (потрібна причина).",
+  regional_fallback: "Немає міських даних — використано ручний орієнтир області.",
+  national_fallback: "Немає міських та обласних даних — використано орієнтир України.",
+};
+
+export const SCOPE_LABEL: Record<GeoScope, string> = {
+  city: "місто",
+  region: "область",
+  country: "Україна",
 };
 
 export const METHOD_LABEL: Record<AggregationMethod, string> = {
   median: "Медіана",
-  arithmetic_mean: "Середнє арифметичне",
 };
 
 export const ROLE_LABEL: Record<ServiceRole, string> = {
@@ -49,12 +76,39 @@ export const ROLE_LABEL: Record<ServiceRole, string> = {
   superstructure: "Супраструктура",
   crown: "Коронка",
   temporary: "Тимчасова коронка",
+  final_abutment: "Фінальний абатмент",
   multiunit: "Мультиюніт",
-  arch_temp: "Тимчасова конструкція",
-  arch_final: "Постійна конструкція",
+  arch: "Повнощелепна конструкція",
+  diagnostic: "Діагностика",
+  removal: "Видалення",
   addon: "Додаткова процедура",
 };
 export const ROLES = Object.keys(ROLE_LABEL) as ServiceRole[];
+
+export const TIER_SOURCE_LABEL: Record<TierSource, string> = {
+  implant_tier: "За рівнем імпланта",
+  crown_or_arch_tier: "За рівнем коронки / конструкції",
+  common: "Спільний (без рівнів)",
+};
+
+/** ТЗ §11.3 — city page states and what each one does. */
+export const SEO_STATUS_LABEL: Record<SeoStatus, string> = {
+  draft: "Чернетка",
+  review: "На перевірці",
+  published: "Опубліковано",
+  stale: "Застаріла",
+  removed: "Знято",
+};
+
+export const SEO_STATUS_HELP: Record<SeoStatus, string> = {
+  draft: "Місто створено, але цін або контенту недостатньо. noindex; немає у sitemap та каталозі міст.",
+  review: "Формули рахуються, сторінка проходить медичну й SEO-перевірку. noindex; доступ лише команді.",
+  published:
+    "Є валідні ціни для ключових сценаріїв, унікальний контент і рецензент. HTTP 200, index, self-canonical, sitemap.",
+  stale: "Критичні ціни втратили актуальність або джерел недостатньо. URL лишається, показується статус; за потреби тимчасово noindex.",
+  removed: "Місто більше не підтримується. Сторінка «місто більше не підтримується» з посиланням на область (301/410 — з власним доменом).",
+};
+export const SEO_STATUSES = Object.keys(SEO_STATUS_LABEL) as SeoStatus[];
 
 export const CURRENCIES = ["UAH", "EUR", "USD"] as const;
 
@@ -217,6 +271,11 @@ export function formatValue(v: unknown): string {
 
 // ───────────── clinic price validation (ТЗ §7.2) ─────────────
 
+/** One-off services (diagnostics, removals) need no composition; everything else does (template instruction 4). */
+export function compositionRequired(role: ServiceRole): boolean {
+  return role !== "diagnostic" && role !== "removal";
+}
+
 export interface PriceFormValues {
   clinic_id: string;
   service_code: string;
@@ -268,7 +327,7 @@ export function validatePriceForm(
     else if (from !== null && !Number.isNaN(from) && to < from) errors.price_to = "«Ціна до» не може бути меншою за «Ціна від».";
   }
   if (!currencies.includes(values.currency)) errors.currency = `Дозволені валюти: ${currencies.join(", ")}.`;
-  if (service && service.role !== "addon" && !values.included_text.trim()) {
+  if (service && compositionRequired(service.role) && !values.included_text.trim()) {
     errors.included_text = "Вкажіть, що входить у ціну: рекламна ціна без складу не допускається до агрегату.";
   }
   if (values.valid_from && Number.isNaN(Date.parse(values.valid_from))) errors.valid_from = "Некоректна дата.";
@@ -294,4 +353,23 @@ export const cellKey = (service_code: string, tier: Tier): string => `${service_
 export function deviationPct(value: number | null, aggregate: number | null): number | null {
   if (value === null || aggregate === null || aggregate === 0) return null;
   return Math.round(((value - aggregate) / aggregate) * 1000) / 10;
+}
+
+// ───────────── blend weights (ТЗ §3.3) ─────────────
+
+function weightLabel(w: number): string {
+  if (Math.abs(w - 1) < 0.005) return "100%";
+  if (Math.abs(w) < 0.005) return "0%";
+  if (Math.abs(w - 1 / 3) < 0.01) return "⅓";
+  if (Math.abs(w - 2 / 3) < 0.01) return "⅔";
+  return `${Math.round(w * 100)}%`;
+}
+
+/** {local: 1/3, baseline: 2/3} → "⅓ локальна + ⅔ базова"; pure cases collapse to one part. */
+export function formatBlend(weights: { local: number; baseline: number } | null | undefined): string {
+  if (!weights) return "—";
+  const { local, baseline } = weights;
+  if (baseline < 0.005) return "100% локальна медіана";
+  if (local < 0.005) return "100% базова";
+  return `${weightLabel(local)} локальна + ${weightLabel(baseline)} базова`;
 }

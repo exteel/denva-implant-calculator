@@ -3,6 +3,7 @@ import {
   deviationPct,
   describeError,
   diffRecords,
+  formatBlend,
   formatMoney,
   midpoint,
   parseAliases,
@@ -16,7 +17,8 @@ import {
 const SERVICES: ServiceLite[] = [
   { service_code: "IMPLANT_INSTALL", tiered: true, role: "implant" },
   { service_code: "SCAN_BOTH", tiered: false, role: "scan" },
-  { service_code: "SINUS", tiered: false, role: "addon" },
+  { service_code: "REMOVAL_SIMPLE", tiered: false, role: "removal" },
+  { service_code: "SINUS_LIFT", tiered: false, role: "addon" },
 ];
 
 const base: PriceFormValues = {
@@ -53,11 +55,14 @@ describe("validatePriceForm", () => {
     expect(validatePriceForm({ ...base, price_to: "15000" }, SERVICES)).toEqual({});
     expect(validatePriceForm({ ...base, currency: "RUB" }, SERVICES).currency).toBeTruthy();
   });
-  it("requires composition except for add-ons", () => {
+  it("requires composition except for one-off diagnostics and removals", () => {
     expect(validatePriceForm({ ...base, included_text: " " }, SERVICES).included_text).toBeTruthy();
     expect(
-      validatePriceForm({ ...base, service_code: "SINUS", tier: "common", included_text: "" }, SERVICES),
+      validatePriceForm({ ...base, service_code: "REMOVAL_SIMPLE", tier: "common", included_text: "" }, SERVICES),
     ).toEqual({});
+    expect(
+      validatePriceForm({ ...base, service_code: "SINUS_LIFT", tier: "common", included_text: "" }, SERVICES).included_text,
+    ).toBeTruthy();
   });
 });
 
@@ -84,6 +89,14 @@ describe("helpers", () => {
     expect(slugify("Дніпро")).toBe("dnipro");
     expect(slugify("Кам'янське")).toBe("kamyanske");
     expect(slugify("Київська область")).toBe("kyyivska-oblast");
+  });
+  it("formats blend weights", () => {
+    expect(formatBlend({ local: 1 / 3, baseline: 2 / 3 })).toBe("⅓ локальна + ⅔ базова");
+    expect(formatBlend({ local: 2 / 3, baseline: 1 / 3 })).toBe("⅔ локальна + ⅓ базова");
+    expect(formatBlend({ local: 1, baseline: 0 })).toBe("100% локальна медіана");
+    expect(formatBlend({ local: 0, baseline: 1 })).toBe("100% базова");
+    expect(formatBlend({ local: 0.4, baseline: 0.6 })).toBe("40% локальна + 60% базова");
+    expect(formatBlend(null)).toBe("—");
   });
   it("formats money", () => {
     expect(formatMoney(null)).toBe("—");

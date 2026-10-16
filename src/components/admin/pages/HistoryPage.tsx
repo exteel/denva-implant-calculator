@@ -13,10 +13,10 @@ import {
   listSnapshots,
   type AuditEntry,
 } from "../api";
-import { METHOD_LABEL, SOURCE_LABEL, TIER_LABEL, diffRecords, formatDateTime, formatPlain, formatValue } from "../helpers";
+import { SCOPE_LABEL, SOURCE_LABEL, TIER_LABEL, diffRecords, formatBlend, formatDateTime, formatPlain, formatValue } from "../helpers";
 import { useAsync } from "../hooks";
 import { Badge, DataState, PageHeader, SelectField, TableWrap, TextField, tdClass, thClass } from "../ui";
-import type { AggregationMethod, SourceType } from "@/lib/contracts";
+import type { GeoScope, SourceType } from "@/lib/contracts";
 
 const ACTION_LABEL = { INSERT: "Створено", UPDATE: "Змінено", DELETE: "Видалено" } as const;
 const ACTION_TONE = { INSERT: "good", UPDATE: "brand", DELETE: "bad" } as const;
@@ -202,14 +202,16 @@ function SnapshotsTab({ initial }: { initial: { city: string; service: string; t
             <h2 className="mb-2 text-[17px] font-extrabold">Snapshot-и агрегату</h2>
             <DataState loading={snaps.loading} error={snaps.error} onRetry={snaps.reload} empty={snaps.data?.length === 0} emptyText="Розрахунків ще не було.">
               <TableWrap>
-                <table className="w-full min-w-[640px] border-collapse">
+                <table className="w-full min-w-[820px] border-collapse">
                   <thead>
                     <tr>
                       <th className={thClass}>Розраховано</th>
                       <th className={thClass}>Значення</th>
                       <th className={thClass}>Клінік</th>
-                      <th className={thClass}>Метод</th>
-                      <th className={thClass}>Виключено</th>
+                      <th className={thClass}>Медіана</th>
+                      <th className={thClass}>Базова</th>
+                      <th className={thClass}>Ваги</th>
+                      <th className={thClass}>Формула</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -218,8 +220,13 @@ function SnapshotsTab({ initial }: { initial: { city: string; service: string; t
                         <td className={tdClass}>{formatDateTime(s.calculated_at)}</td>
                         <td className={`${tdClass} tabular font-bold`}>{formatPlain(s.value)}</td>
                         <td className={`${tdClass} tabular`}>{s.clinic_count}</td>
-                        <td className={tdClass}>{METHOD_LABEL[s.method as AggregationMethod] ?? s.method}</td>
-                        <td className={`${tdClass} tabular`}>{s.excluded?.length ?? 0}</td>
+                        <td className={`${tdClass} tabular`}>{formatPlain(s.local_median)}</td>
+                        <td className={`${tdClass} tabular`}>
+                          {formatPlain(s.baseline_value)}
+                          {s.baseline_scope ? <span className="text-xs text-muted"> ({SCOPE_LABEL[s.baseline_scope as GeoScope] ?? s.baseline_scope})</span> : null}
+                        </td>
+                        <td className={tdClass}>{formatBlend(s.blend_weights)}</td>
+                        <td className={`${tdClass} max-w-[18rem] font-mono text-[11px]`}>{s.formula ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -250,7 +257,7 @@ function SnapshotsTab({ initial }: { initial: { city: string; service: string; t
                           {formatPlain(p.previous_value)} → <span className="font-bold">{formatPlain(p.value)}</span> {p.currency ?? ""}
                         </td>
                         <td className={tdClass}>{p.source_type ? (SOURCE_LABEL[p.source_type as SourceType] ?? p.source_type) : "—"}</td>
-                        <td className={`${tdClass} tabular`}>{p.clinic_count ?? "—"}</td>
+                        <td className={`${tdClass} tabular`}>{p.local_clinic_count ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -21,18 +21,13 @@ type Phase =
   | { kind: "sent" }
   | { kind: "failed"; leadId: string | null };
 
-const SUBMIT_LABEL: Record<LeadIntent, string> = {
-  refine: "Надіслати заявку",
-  send_calculation: "Надіслати розрахунок",
-};
-
 /**
  * ТЗ §6.3: voluntary lead form BELOW the result — never a modal, never a
  * blocker. A phone is all it asks for. A failed Telegram delivery keeps the
- * stored lead and offers "Надіслати ще раз".
+ * stored lead and offers «Надіслати ще раз».
  */
 export function LeadBlock({ buildLead, submit }: Props) {
-  const [intent, setIntent] = useState<LeadIntent>("refine");
+  const [intent, setIntent] = useState<LeadIntent>("dental_tender");
   const [phase, setPhase] = useState<Phase>({ kind: "closed" });
   const [phone, setPhone] = useState("");
   const [touched, setTouched] = useState(false);
@@ -79,15 +74,13 @@ export function LeadBlock({ buildLead, submit }: Props) {
 
   if (phase.kind === "sent") {
     return (
-      <section
-        data-testid="lead-block"
-        className="rounded-[var(--radius-card)] border border-good/30 bg-good-soft p-5"
-        role="status"
-      >
+      <section data-testid="lead-block" className="rounded-[var(--radius-card)] border border-good/30 bg-good-soft p-5" role="status">
         <p className="text-[17px] font-extrabold text-good">Дякуємо! Заявку отримано.</p>
         <p className="mt-1 text-[15px] leading-relaxed text-ink-soft">
-          Координатор DENVA зв’яжеться з вами за вказаним номером. Ваш розрахунок уже додано до заявки — нічого
-          не потрібно пояснювати заново.
+          {intent === "dental_tender"
+            ? "Ми передали ваш розрахунок у Dental Tender: перевірені клініки надішлють персональні пропозиції."
+            : "Координатор DENVA зв’яжеться з вами та допоможе уточнити розрахунок."}{" "}
+          Нічого не потрібно пояснювати заново — розрахунок уже додано до заявки.
         </p>
       </section>
     );
@@ -100,30 +93,30 @@ export function LeadBlock({ buildLead, submit }: Props) {
       className="rounded-[var(--radius-card)] border border-brand-line bg-brand-soft/50 p-5"
     >
       <h2 id="lead-title" className="text-[19px] leading-snug font-extrabold">
-        Уточнити мій розрахунок
+        Що далі?
       </h2>
       <p className="mt-2 text-[15px] leading-relaxed text-ink-soft">
-        Координатор DENVA допоможе врахувати можливі видалення, тимчасові зуби, кісткову пластику та інші етапи,
-        які неможливо визначити без додаткових даних
+        Результат вище доступний без телефону. Якщо хочете, передайте розрахунок у Dental Tender — або попросіть
+        координатора DENVA уточнити його з урахуванням видалень, тимчасових зубів, кісткової пластики та інших етапів.
       </p>
 
       <div className="mt-4 grid gap-2.5">
         <Button
+          aria-pressed={open && intent === "dental_tender"}
+          onClick={() => openForm("dental_tender")}
+          className="h-auto w-full py-3 text-center leading-snug"
+          data-testid="cta-tender"
+        >
+          Отримати персональні пропозиції від перевірених клінік
+        </Button>
+        <Button
+          variant="secondary"
           aria-pressed={open && intent === "refine"}
           onClick={() => openForm("refine")}
           className="w-full"
           data-testid="cta-refine"
         >
           Уточнити мій розрахунок
-        </Button>
-        <Button
-          variant="secondary"
-          aria-pressed={open && intent === "send_calculation"}
-          onClick={() => openForm("send_calculation")}
-          className="h-auto w-full py-3 text-center leading-snug"
-          data-testid="cta-send"
-        >
-          Надіслати мені розрахунок і список запитань для консультації
         </Button>
       </div>
 
@@ -158,7 +151,7 @@ export function LeadBlock({ buildLead, submit }: Props) {
               <p className="font-extrabold text-bad">Не вдалося доставити заявку</p>
               <p className="mt-1 text-sm leading-relaxed text-ink-soft">
                 {phase.leadId
-                  ? "Заявку збережено, але передати її координатору одразу не вийшло. Ваш розрахунок нікуди не зник — спробуйте надіслати ще раз."
+                  ? "Заявку збережено, але передати її одразу не вийшло. Ваш розрахунок нікуди не зник — спробуйте надіслати ще раз."
                   : "Перевірте з’єднання з інтернетом і спробуйте ще раз. Ваш розрахунок нікуди не зник."}
               </p>
               <Button
@@ -181,13 +174,13 @@ export function LeadBlock({ buildLead, submit }: Props) {
 
           {phase.kind !== "failed" && (
             <Button type="submit" className="mt-4 w-full" disabled={phase.kind === "sending"}>
-              {phase.kind === "sending" ? "Надсилаємо…" : SUBMIT_LABEL[intent]}
+              {phase.kind === "sending" ? "Надсилаємо…" : "Надіслати заявку"}
             </Button>
           )}
 
           <p className="mt-3 text-xs leading-relaxed text-muted">
-            Надсилаючи номер, ви погоджуєтеся, що координатор DENVA зв’яжеться з вами щодо цього розрахунку. SMS-код
-            не потрібен.
+            Надсилаючи номер, ви погоджуєтеся, що DENVA і перевірені клініки зв’яжуться з вами щодо цього розрахунку.
+            SMS-код не потрібен.
           </p>
         </form>
       )}

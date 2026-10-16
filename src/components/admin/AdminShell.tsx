@@ -17,7 +17,7 @@ const NAV: ReadonlyArray<{ href: string; label: string }> = [
   { href: "/admin/services/", label: "Каталог послуг" },
   { href: "/admin/prices/", label: "Прайси клінік" },
   { href: "/admin/import/", label: "Імпорт Excel" },
-  { href: "/admin/benchmarks/", label: "Міські орієнтири" },
+  { href: "/admin/benchmarks/", label: "Базові ціни" },
   { href: "/admin/aggregates/", label: "Агрегати міста" },
   { href: "/admin/history/", label: "Історія змін" },
   { href: "/admin/leads/", label: "Заявки" },

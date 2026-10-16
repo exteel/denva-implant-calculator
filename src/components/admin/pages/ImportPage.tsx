@@ -4,54 +4,34 @@ import Link from "next/link";
 import { useMemo, useState, type ChangeEvent } from "react";
 import { Card, SectionTitle } from "@/components/ui/Card";
 import type { ImportReport } from "@/lib/contracts";
-import { importClinicPrices, listCities, listClinics, listImportBatches, listServices, type Clinic } from "../api";
-import { norm } from "../excel/columns";
-import { clientRejected, matchCity, parseTemplateFile, toImportPayload, type ParsedTemplate } from "../excel/parse";
-import { TEMPLATE_FILE_NAME, generateTemplateBlob } from "../excel/template";
+import { importClinicPrices, listCities, listClinics, listImportBatches, listRegions, listServices, type Clinic } from "../api";
+import { TEMPLATE_FILE_NAME, norm, templateUrl } from "../excel/columns";
+import { clientRejected, matchCities, parseTemplateFile, toImportPayload, type ParsedTemplate } from "../excel/parse";
 import { CURRENCIES, TIER_LABEL, describeError, formatDateTime, formatPlain } from "../helpers";
 import { useAsync } from "../hooks";
+import { buttonClass } from "@/components/ui/Button";
 import { Badge, Button, DataState, MiniButton, Notice, PageHeader, SelectField, TableWrap, tdClass, thClass, useAction } from "../ui";
-
-function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 export default function ImportPage() {
   const cities = useAsync(listCities, []);
   const services = useAsync(listServices, []);
+  const regions = useAsync(listRegions, []);
   const clinics = useAsync(() => listClinics({}), []);
   const batches = useAsync(listImportBatches, []);
 
   const [fileName, setFileName] = useState("");
   const [parsed, setParsed] = useState<ParsedTemplate | null>(null);
   const [cityId, setCityId] = useState("");
-  const [clinicId, setClinicId] = useState(""); // "" = create a draft clinic from the card
+  const [candidateIds, setCandidateIds] = useState<string[]>([]);
+  const [clinicId, setClinicId] = useState(""); // "" = backend reuses by city + name, else creates a draft
   const [report, setReport] = useState<ImportReport | null>(null);
   const [rejected, setRejected] = useState<Array<{ row_number: number; message: string }>>([]);
   const [rowNames, setRowNames] = useState<Record<number, string>>({});
-  const tpl = useAction();
+  const [clientSkipped, setClientSkipped] = useState<number[]>([]);
   const reading = useAction();
   const sending = useAction();
 
   const clinicsInCity = useMemo(() => (clinics.data ?? []).filter((c) => c.city_id === cityId), [clinics.data, cityId]);
-
-  async function makeTemplate() {
-    await tpl.run(async () => {
-      const blob = await generateTemplateBlob({
-        services: (services.data ?? [])
-          .filter((s) => s.active)
-          .map((s) => ({ service_code: s.service_code, name: s.name, tiered: s.tiered })),
-      });
-      download(blob, TEMPLATE_FILE_NAME);
-    }, describeError);
-  }
 
   async function onFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -67,7 +47,9 @@ export default function ImportPage() {
     );
     if (!result) return;
     setParsed(result);
-    const city = matchCity(result.card.city_name, cities.data ?? []);
+    const candidates = matchCities(result.card.city_name, cities.data ?? [], { name: result.card.region, regions: regions.data ?? [] });
+    setCandidateIds(candidates.map((c) => c.id));
+    const city = candidates.length === 1 ? candidates[0] : undefined; // ambiguous or unknown → the admin picks
     setCityId(city?.id ?? "");
     const existing = city
       ? (clinics.data ?? []).find((c) => c.city_id === city.id && norm(c.name) === norm(result.card.name))
@@ -85,7 +67,8 @@ export default function ImportPage() {
     const payload = toImportPayload(parsed, { fileName, cityId, clinicId: clinicId || null });
     const res = await sending.run(() => importClinicPrices(payload), describeError);
     if (res) {
-      setRowNames(Object.fromEntries(parsed.rows.map((r) => [r.row.row_number, r.row.offer_name])));
+      setRowNames(Object.fromEntries(parsed.rows.map((r) => [r.row.row_number, r.row.service_name ?? r.row.service_code ?? ""])));
+      setClientSkipped(parsed.skippedEmpty);
       setReport(res);
       setRejected(clientRejected(parsed));
       setParsed(null);
@@ -105,19 +88,14 @@ export default function ImportPage() {
         <Card>
           <SectionTitle>1. Шаблон «DENVA шаблон цін клініки»</SectionTitle>
           <p className="mt-2 text-sm text-muted">
-            Аркуш «Прайс»: картка клініки, фактична пропозиція (заповнює клініка), стандартний код і рівень та модерація
-            (заповнює DENVA). Аркуш «Інструкція» пояснює правила.
+            Файл власника без змін: аркуш «Прайс клініки» (картка клініки, рядки послуг із кодами й рівнями) та «Інструкція». Клініка
+            заповнює лише ціни та склад; порожні рядки пропускаються.
           </p>
           <div className="mt-4">
-            <Button onClick={() => void makeTemplate()} disabled={tpl.busy} className="min-h-10">
-              {tpl.busy ? "Формування…" : "Завантажити шаблон"}
-            </Button>
+            <a href={templateUrl()} download={TEMPLATE_FILE_NAME} className={buttonClass("primary", "min-h-10 no-underline")}>
+              Завантажити шаблон
+            </a>
           </div>
-          {tpl.error ? (
-            <div className="mt-3">
-              <Notice tone="bad" role="alert">{tpl.error}</Notice>
-            </div>
-          ) : null}
         </Card>
 
         <Card>
@@ -157,10 +135,14 @@ export default function ImportPage() {
             <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
               <div><dt className="text-muted">Назва</dt><dd className="font-bold">{parsed.card.name || "—"}</dd></div>
               <div><dt className="text-muted">Місто у файлі</dt><dd className="font-bold">{parsed.card.city_name || "—"}</dd></div>
-              <div><dt className="text-muted">Контакти</dt><dd>{parsed.card.contacts ?? "—"}</dd></div>
+              <div><dt className="text-muted">Область</dt><dd>{parsed.card.region ?? "—"}</dd></div>
+              <div><dt className="text-muted">Адреса</dt><dd>{parsed.card.address ?? "—"}</dd></div>
+              <div><dt className="text-muted">Контактна особа</dt><dd>{parsed.card.contact_person ?? "—"}</dd></div>
+              <div><dt className="text-muted">Телефон або email</dt><dd>{parsed.card.contacts ?? "—"}</dd></div>
               <div><dt className="text-muted">Дата чинності</dt><dd>{parsed.card.valid_from ?? "—"}</dd></div>
-              <div><dt className="text-muted">Валюта</dt><dd>{parsed.card.currency}</dd></div>
-              <div><dt className="text-muted">Достовірність підтверджено</dt><dd>{parsed.card.confirmed ? "Так" : "Ні"}</dd></div>
+              <div><dt className="text-muted">Dental Tender</dt><dd>{parsed.card.dental_tender ? "Так" : "Ні"}</dd></div>
+              <div><dt className="text-muted">Публічний профіль</dt><dd>{parsed.card.public_profile_consent ? "Згода є" : "Немає згоди"}</dd></div>
+              <div><dt className="text-muted">Достовірність підтверджено</dt><dd>{parsed.card.data_confirmed ? "Так" : "Ні"}</dd></div>
             </dl>
             <div className="mt-3 space-y-2">
               {parsed.cardErrors.map((m) => (
@@ -175,25 +157,34 @@ export default function ImportPage() {
                 label="Місто у системі"
                 required
                 value={cityId}
-                error={!cityId ? "Оберіть місто: назву з файлу не вдалося зіставити з довідником." : null}
+                error={
+                  !cityId
+                    ? candidateIds.length > 1
+                      ? "У довіднику кілька міст із такою назвою — оберіть потрібне."
+                      : "Назву з файлу не вдалося зіставити з довідником — оберіть місто вручну."
+                    : null
+                }
                 onChange={(e) => {
                   setCityId(e.target.value);
                   setClinicId("");
                 }}
               >
                 <option value="">— оберіть —</option>
-                {cities.data?.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
+                {(candidateIds.length > 1 ? (cities.data ?? []).filter((c) => candidateIds.includes(c.id)) : (cities.data ?? [])).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {regions.data?.find((r) => r.id === c.region_id) ? ` — ${regions.data.find((r) => r.id === c.region_id)!.name}` : ""}
+                  </option>
                 ))}
               </SelectField>
               <SelectField
                 label="Клініка"
                 value={clinicId}
-                hint="Додайте ціни до наявної клініки або створіть чернетку за карткою"
+                hint="Додайте ціни до наявної клініки або дозвольте базі знайти її за містом і назвою"
                 onChange={(e) => setClinicId(e.target.value)}
                 disabled={!cityId}
               >
-                <option value="">Створити нову клініку «{parsed.card.name}» (чернетка)</option>
+                <option value="">Знайти за назвою або створити чернетку «{parsed.card.name}»</option>
                 {clinicsInCity.map((c: Clinic) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
@@ -203,6 +194,7 @@ export default function ImportPage() {
 
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <Badge tone="good">Готово до імпорту: {okRows.length}</Badge>
+            <Badge tone="neutral">Без ціни (пропущено): {parsed.skippedEmpty.length}</Badge>
             <Badge tone={badRows.length ? "bad" : "neutral"}>З помилками (не надсилаються): {badRows.length}</Badge>
             <Badge tone="warn">
               З попередженнями: {parsed.rows.filter((r) => r.warnings.length > 0 && r.errors.length === 0).length}
@@ -214,7 +206,7 @@ export default function ImportPage() {
               <thead>
                 <tr>
                   <th className={thClass}>Рядок</th>
-                  <th className={thClass}>Назва у прайсі</th>
+                  <th className={thClass}>Послуга</th>
                   <th className={thClass}>Ціна</th>
                   <th className={thClass}>service_code / рівень</th>
                   <th className={thClass}>Склад</th>
@@ -226,8 +218,8 @@ export default function ImportPage() {
                   <tr key={r.row.row_number} className={r.errors.length ? "bg-bad-soft/40" : undefined}>
                     <td className={`${tdClass} tabular text-muted`}>{r.row.row_number}</td>
                     <td className={tdClass}>
-                      <span className="font-bold">{r.row.offer_name || "—"}</span>
-                      {r.row.brand_material ? <div className="text-xs text-muted">{r.row.brand_material}</div> : null}
+                      <span className="font-bold">{r.row.service_name || "—"}</span>
+                      {r.row.category ? <div className="text-xs text-muted">{r.row.category}{r.row.unit ? ` · ${r.row.unit}` : ""}</div> : null}
                     </td>
                     <td className={`${tdClass} tabular`}>
                       {formatPlain(r.row.price_from)}
@@ -237,9 +229,9 @@ export default function ImportPage() {
                       {r.row.service_code ? (
                         <span className="font-mono text-xs">{r.row.service_code}</span>
                       ) : (
-                        <span className="text-muted">заповнить DENVA</span>
+                        <span className="text-muted">без коду</span>
                       )}
-                      {r.row.tier ? <div className="text-xs text-muted">{TIER_LABEL[r.row.tier]}</div> : null}
+                      {r.row.tier ? <div className="text-xs text-muted">{TIER_LABEL[r.row.tier]} ({r.row.tier})</div> : null}
                     </td>
                     <td className={`${tdClass} max-w-[16rem] text-xs`}>
                       {r.row.included_text ?? <span className="text-muted">—</span>}
@@ -274,7 +266,7 @@ export default function ImportPage() {
 
       {report ? (
         <section className="mt-6" aria-label="Протокол імпорту">
-          <ReportView report={report} rejected={rejected} nameOf={(n) => rowNames[n]} />
+          <ReportView report={report} rejected={rejected} clientSkipped={clientSkipped} nameOf={(n) => rowNames[n]} />
         </section>
       ) : null}
 
@@ -328,27 +320,32 @@ export default function ImportPage() {
 function ReportView({
   report,
   rejected,
+  clientSkipped,
   nameOf,
 }: {
   report: ImportReport;
   rejected: Array<{ row_number: number; message: string }>;
+  clientSkipped: number[];
   nameOf: (n: number) => string | undefined;
 }) {
+  const skipped = [...new Set([...clientSkipped, ...(report.skipped_empty ?? [])])].sort((a, b) => a - b);
   const errors = [...rejected, ...report.errors].sort((a, b) => a.row_number - b.row_number);
   const list = (rows: number[]) =>
     rows.length ? rows.map((n) => (nameOf(n) ? `${n} (${nameOf(n)})` : String(n))).join(", ") : "—";
   return (
     <Card>
       <SectionTitle>Протокол імпорту</SectionTitle>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <Stat label="Прийняті рядки" value={report.accepted.length} tone="good" />
         <Stat label="Помилки" value={errors.length} tone="bad" />
+        <Stat label="Без ціни (пропущено)" value={skipped.length} tone="brand" />
         <Stat label="Дублікати" value={report.duplicates.length} tone="warn" />
         <Stat label="Невідомі service_code" value={report.unknown_service_code.length} tone="warn" />
         <Stat label="Очікують модерації" value={report.pending_moderation.length} tone="brand" />
       </div>
       <dl className="mt-4 space-y-2 text-sm">
         <div><dt className="font-bold">Прийняті (рядки)</dt><dd className="text-ink-soft">{list(report.accepted)}</dd></div>
+        <div><dt className="font-bold">Без ціни (skipped_empty)</dt><dd className="text-ink-soft">{skipped.length ? skipped.join(", ") : "—"}</dd></div>
         <div><dt className="font-bold">Дублікати</dt><dd className="text-ink-soft">{list(report.duplicates)}</dd></div>
         <div><dt className="font-bold">Невідомі service_code</dt><dd className="text-ink-soft">{list(report.unknown_service_code)}</dd></div>
         <div>

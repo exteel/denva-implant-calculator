@@ -10,15 +10,20 @@ import {
   listRegions,
   listServices,
   saveBenchmarks,
-  type BenchmarkChange,
   type BenchmarkScope,
   type Service,
 } from "../api";
-import { MODE_LABEL, TIER_LABEL, cellKey, describeError, formatPlain, parseDecimal } from "../helpers";
+import { computeChanges, type CellEdit } from "../benchmarks";
+import { MODE_LABEL, TIER_LABEL, cellKey, describeError, formatPlain } from "../helpers";
 import { useAsync } from "../hooks";
-import { Badge, ConfirmDialog, DataState, MiniButton, Notice, PageHeader, SelectField, TableWrap, tdClass, thClass, useAction } from "../ui";
+import { Badge, ConfirmDialog, DataState, MiniButton, Notice, PageHeader, TableWrap, SelectField, tdClass, thClass, useAction } from "../ui";
 
 const TIER_COLUMNS: Tier[] = ["common", "minimum", "classic", "premium"];
+const SCOPES: ReadonlyArray<{ value: BenchmarkScope; label: string; help: string }> = [
+  { value: "country", label: "Україна", help: "Середня ціна України — останній рівень запасу, коли немає міських та обласних даних." },
+  { value: "region", label: "Області", help: "Середня ціна області — запас для міст без власного орієнтира." },
+  { value: "city", label: "Міста", help: "Ручний орієнтир міста — найвищий пріоритет серед базових цін. Тут же — режим override." },
+];
 
 /** Re-mounts when the query string changes so dashboard links preselect the city. */
 export default function BenchmarksPage() {
@@ -26,23 +31,20 @@ export default function BenchmarksPage() {
   return <BenchmarksView key={params.toString()} params={params} />;
 }
 
-interface Edit {
-  value?: string;
-  mode?: PriceMode;
-}
-
 function BenchmarksView({ params }: { params: URLSearchParams }) {
-  const [scope, setScope] = useState<BenchmarkScope>(params.get("scope") === "region" ? "region" : "city");
+  const initialScope = (["country", "region", "city"] as const).find((s) => s === params.get("scope")) ?? "country";
+  const [scope, setScope] = useState<BenchmarkScope>(initialScope);
   const [targetId, setTargetId] = useState(params.get("id") ?? "");
 
   const cities = useAsync(listCities, []);
   const regions = useAsync(listRegions, []);
   const services = useAsync(listServices, []);
 
-  const manual = useAsync(() => (targetId ? listManualPrices(scope, targetId) : Promise.resolve([])), [scope, targetId]);
-  const modes = useAsync(() => (targetId && scope === "city" ? listPriceModes(targetId) : Promise.resolve([])), [scope, targetId]);
+  const ready = scope === "country" || Boolean(targetId);
+  const manual = useAsync(() => (ready ? listManualPrices(scope, targetId) : Promise.resolve([])), [scope, targetId, ready]);
+  const modes = useAsync(() => (scope === "city" && targetId ? listPriceModes(targetId) : Promise.resolve([])), [scope, targetId]);
 
-  const [edits, setEdits] = useState<Record<string, Edit>>({});
+  const [edits, setEdits] = useState<Record<string, CellEdit>>({});
   const [askSave, setAskSave] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const act = useAction();
@@ -50,14 +52,15 @@ function BenchmarksView({ params }: { params: URLSearchParams }) {
   const original = useMemo(() => {
     const values = new Map<string, number>();
     manual.data?.forEach((m) => values.set(cellKey(m.service_code, m.tier), Number(m.value)));
-    const modeMap = new Map<string, PriceMode>();
-    modes.data?.forEach((m) => modeMap.set(cellKey(m.service_code, m.tier), m.mode));
-    return { values, modeMap };
+    const modeMap = new Map<string, { mode: PriceMode; override_value: number | null }>();
+    modes.data?.forEach((m) =>
+      modeMap.set(cellKey(m.service_code, m.tier), { mode: m.mode, override_value: m.override_value == null ? null : Number(m.override_value) }),
+    );
+    return { values, modes: modeMap };
   }, [manual.data, modes.data]);
 
   const activeServices = (services.data ?? []).filter((s) => s.active);
-  const cityObj = cities.data?.find((c) => c.id === targetId);
-  const currency = scope === "city" ? (cityObj?.currency ?? "UAH") : "UAH";
+  const { changes, invalid, needsReason } = useMemo(() => computeChanges(edits, original, scope), [edits, original, scope]);
 
   const currentValue = (key: string): string => {
     const edit = edits[key]?.value;
@@ -65,37 +68,22 @@ function BenchmarksView({ params }: { params: URLSearchParams }) {
     const o = original.values.get(key);
     return o === undefined ? "" : String(o);
   };
-  const currentMode = (key: string): PriceMode => edits[key]?.mode ?? original.modeMap.get(key) ?? "auto";
-
-  // compute dirty changes + validation
-  const { changes, invalid } = useMemo(() => {
-    const list: BenchmarkChange[] = [];
-    const bad = new Set<string>();
-    for (const [key, edit] of Object.entries(edits)) {
-      const [service_code, tier] = key.split("|") as [string, Tier];
-      const change: BenchmarkChange = { service_code, tier };
-      if (edit.value !== undefined) {
-        const parsed = parseDecimal(edit.value);
-        const o = original.values.get(key);
-        if (parsed !== null && (Number.isNaN(parsed) || parsed <= 0)) bad.add(key);
-        else if (parsed === null && o !== undefined) change.value = null;
-        else if (parsed !== null && parsed !== o) change.value = parsed;
-      }
-      if (edit.mode !== undefined && edit.mode !== (original.modeMap.get(key) ?? "auto")) change.mode = edit.mode;
-      if (change.value !== undefined || change.mode !== undefined) list.push(change);
-    }
-    return { changes: list, invalid: bad };
-  }, [edits, original]);
-
-  const setEdit = (key: string, patch: Edit) => setEdits((e) => ({ ...e, [key]: { ...e[key], ...patch } }));
+  const currentMode = (key: string): PriceMode => edits[key]?.mode ?? original.modes.get(key)?.mode ?? "auto";
+  const currentOverride = (key: string): string => {
+    const edit = edits[key]?.override;
+    if (edit !== undefined) return edit;
+    const o = original.modes.get(key)?.override_value;
+    return o == null ? "" : String(o);
+  };
+  const setEdit = (key: string, patch: CellEdit) => setEdits((e) => ({ ...e, [key]: { ...e[key], ...patch } }));
 
   async function save(reason: string) {
     const ok = await act.run(async () => {
       await saveBenchmarks(scope, targetId, changes, reason);
       return true;
     }, describeError);
-    setAskSave(false);
     if (ok) {
+      setAskSave(false);
       setSaved(`Збережено змін: ${changes.length}. Перерахунок виконає черга (до хвилини) або кнопка «Перерахувати» на сторінці агрегатів.`);
       setEdits({});
       manual.reload();
@@ -104,56 +92,73 @@ function BenchmarksView({ params }: { params: URLSearchParams }) {
   }
 
   const applicable = (s: Service, tier: Tier) => (s.tiered ? tier !== "common" : tier === "common");
-  const targets = scope === "city" ? cities : regions;
+  const scopeInfo = SCOPES.find((s) => s.value === scope)!;
+  const targets = scope === "city" ? cities.data : scope === "region" ? regions.data : undefined;
 
   return (
     <>
       <PageHeader
-        title="Міські орієнтири"
-        description="Ручні ринкові значення для кожної послуги. Режим комірки визначає, що публікується: авто — агрегат клінік за достатньої вибірки, інакше орієнтир; ручний — завжди орієнтир; override — агрегат рахується, але не публікується."
+        title="Базові ціни"
+        description="Ручні ринкові значення трьох рівнів. Базовий орієнтир для міста береться за пріоритетом: місто → область → Україна. Локальні прайси клінік змішуються з ним (1–2 клініки) або замінюють його (3+)."
       />
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <SelectField
-          label="Тип"
-          value={scope}
-          onChange={(e) => {
-            setScope(e.target.value as BenchmarkScope);
-            setTargetId("");
-            setEdits({});
-          }}
-        >
-          <option value="city">Місто</option>
-          <option value="region">Регіон (fallback)</option>
-        </SelectField>
-        <SelectField
-          label={scope === "city" ? "Місто" : "Регіон"}
-          value={targetId}
-          onChange={(e) => {
-            setTargetId(e.target.value);
-            setEdits({});
-            setSaved(null);
-          }}
-        >
-          <option value="">— оберіть —</option>
-          {targets.data?.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
+      <div className="mb-3 flex flex-wrap items-end gap-3">
+        <div role="radiogroup" aria-label="Рівень базових цін" className="inline-flex rounded-lg border border-line-strong bg-paper p-0.5">
+          {SCOPES.map((s) => (
+            <button
+              key={s.value}
+              type="button"
+              role="radio"
+              aria-checked={scope === s.value}
+              onClick={() => {
+                setScope(s.value);
+                setTargetId("");
+                setEdits({});
+                setSaved(null);
+              }}
+              className={`min-h-9 rounded-md px-4 text-[13px] font-bold ${scope === s.value ? "bg-brand text-white" : "text-ink-soft hover:bg-canvas"}`}
+            >
+              {s.label}
+            </button>
           ))}
-        </SelectField>
-        <div className="flex items-end gap-2 pb-0.5">
+        </div>
+        {targets ? (
+          <div className="min-w-56">
+            <SelectField
+              label={scope === "city" ? "Місто" : "Область"}
+              value={targetId}
+              onChange={(e) => {
+                setTargetId(e.target.value);
+                setEdits({});
+                setSaved(null);
+              }}
+            >
+              <option value="">— оберіть —</option>
+              {targets.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </SelectField>
+          </div>
+        ) : null}
+        <div className="flex gap-2 pb-0.5">
           <MiniButton tone="brand" disabled={changes.length === 0 || invalid.size > 0 || act.busy} onClick={() => setAskSave(true)}>
             Зберегти зміни ({changes.length})
           </MiniButton>
           <MiniButton disabled={Object.keys(edits).length === 0} onClick={() => setEdits({})}>Скасувати</MiniButton>
         </div>
       </div>
+      <p className="mb-4 text-sm text-muted">{scopeInfo.help}</p>
 
       {saved ? <div className="mb-3"><Notice tone="good" role="status">{saved}</Notice></div> : null}
       {act.error && !askSave ? <div className="mb-3"><Notice tone="bad" role="alert">{act.error}</Notice></div> : null}
-      {invalid.size > 0 ? <div className="mb-3"><Notice tone="bad" role="alert">Значення має бути числом більше нуля. Виправте підсвічені комірки.</Notice></div> : null}
+      {invalid.size > 0 ? (
+        <div className="mb-3">
+          <Notice tone="bad" role="alert">Виправте підсвічені комірки: {[...new Set(invalid.values())].join(" ")}</Notice>
+        </div>
+      ) : null}
 
-      {!targetId ? (
-        <p className="py-6 text-sm text-muted">Оберіть {scope === "city" ? "місто" : "регіон"}, щоб побачити та змінити орієнтири.</p>
+      {!ready ? (
+        <p className="py-6 text-sm text-muted">Оберіть {scope === "city" ? "місто" : "область"}, щоб побачити та змінити орієнтири.</p>
       ) : (
         <DataState
           loading={manual.loading || modes.loading || services.loading}
@@ -172,7 +177,7 @@ function BenchmarksView({ params }: { params: URLSearchParams }) {
                 <tr>
                   <th className={thClass}>Послуга</th>
                   {TIER_COLUMNS.map((t) => (
-                    <th key={t} className={thClass}>{TIER_LABEL[t]}, {currency}</th>
+                    <th key={t} className={thClass}>{TIER_LABEL[t]}, ₴</th>
                   ))}
                 </tr>
               </thead>
@@ -186,36 +191,50 @@ function BenchmarksView({ params }: { params: URLSearchParams }) {
                     {TIER_COLUMNS.map((tier) => {
                       if (!applicable(s, tier)) return <td key={tier} className={`${tdClass} bg-canvas text-center text-muted`}>—</td>;
                       const key = cellKey(s.service_code, tier);
-                      const isInvalid = invalid.has(key);
+                      const problem = invalid.get(key);
                       const dirty = changes.some((c) => c.service_code === s.service_code && c.tier === tier);
                       const label = `${s.name}, ${TIER_LABEL[tier]}`;
+                      const mode = currentMode(key);
                       return (
                         <td key={tier} className={`${tdClass} ${dirty ? "bg-warn-soft" : ""}`}>
                           <input
                             inputMode="decimal"
                             aria-label={`Орієнтир: ${label}`}
-                            aria-invalid={isInvalid}
+                            aria-invalid={Boolean(problem) && mode !== "manual_override"}
                             value={currentValue(key)}
                             placeholder="—"
                             onChange={(e) => setEdit(key, { value: e.target.value })}
-                            className={`tabular min-h-9 w-28 rounded-lg border px-2 text-right text-sm ${isInvalid ? "border-bad" : "border-line-strong"}`}
+                            className="tabular min-h-9 w-28 rounded-lg border border-line-strong px-2 text-right text-sm"
                           />
                           {scope === "city" ? (
-                            <select
-                              aria-label={`Режим: ${label}`}
-                              value={currentMode(key)}
-                              onChange={(e) => setEdit(key, { mode: e.target.value as PriceMode })}
-                              className="mt-1 block min-h-8 w-full max-w-[9.5rem] rounded-lg border border-line-strong bg-paper px-1 text-xs"
-                            >
-                              {(Object.keys(MODE_LABEL) as PriceMode[]).map((m) => (
-                                <option key={m} value={m}>{MODE_LABEL[m]}</option>
-                              ))}
-                            </select>
+                            <>
+                              <select
+                                aria-label={`Режим: ${label}`}
+                                value={mode}
+                                onChange={(e) => setEdit(key, { mode: e.target.value as PriceMode })}
+                                className="mt-1 block min-h-8 w-full max-w-[10rem] rounded-lg border border-line-strong bg-paper px-1 text-xs"
+                              >
+                                {(Object.keys(MODE_LABEL) as PriceMode[]).map((m) => (
+                                  <option key={m} value={m}>{MODE_LABEL[m]}</option>
+                                ))}
+                              </select>
+                              {mode === "manual_override" ? (
+                                <input
+                                  inputMode="decimal"
+                                  aria-label={`Значення override: ${label}`}
+                                  aria-invalid={Boolean(problem)}
+                                  value={currentOverride(key)}
+                                  placeholder="значення override"
+                                  onChange={(e) => setEdit(key, { override: e.target.value })}
+                                  className={`tabular mt-1 min-h-8 w-28 rounded-lg border px-2 text-right text-xs ${problem ? "border-bad" : "border-warn-line bg-warn-soft"}`}
+                                />
+                              ) : null}
+                            </>
                           ) : null}
-                          {scope === "city" && currentMode(key) !== "auto" && !currentValue(key) ? (
-                            <div className="mt-1"><Badge tone="warn" title="Режим ручний, але значення немає">немає значення</Badge></div>
+                          {scope === "city" && mode === "manual_override" ? (
+                            <div className="mt-1"><Badge tone="warn" title="Публікується це значення замість формули">override</Badge></div>
                           ) : null}
-                          {original.values.has(key) && edits[key]?.value !== undefined && !isInvalid ? (
+                          {original.values.has(key) && edits[key]?.value !== undefined && !problem ? (
                             <div className="mt-1 text-[11px] text-muted">було {formatPlain(original.values.get(key))}</div>
                           ) : null}
                         </td>
@@ -231,10 +250,16 @@ function BenchmarksView({ params }: { params: URLSearchParams }) {
 
       {askSave ? (
         <ConfirmDialog
-          title="Зберегти орієнтири"
-          message={`Змін: ${changes.length}. Кожна зміна запускає перерахунок лише для відповідного міста, послуги та рівня.`}
+          title="Зберегти базові ціни"
+          message={
+            <>
+              <p>Змін: {changes.length}. Кожна зміна запускає перерахунок лише для відповідних міст, послуг і рівнів.</p>
+              {needsReason ? <p className="mt-1 font-bold text-warn">Серед змін є override — причина обов&apos;язкова.</p> : null}
+            </>
+          }
           confirmLabel="Зберегти"
           askReason
+          reasonRequired={needsReason}
           busy={act.busy}
           error={act.error}
           onConfirm={(reason) => void save(reason)}

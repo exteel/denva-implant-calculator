@@ -86,7 +86,7 @@ export function filterLeads(leads: readonly LeadRow[], { period, excludeTests, n
 export interface Summary {
   total: number;
   today: number;
-  /** Mean of total_uah over leads that have a positive figure; null when none. */
+  /** Mean of the lead's overall total (midpoint of a range) over leads that have one; null when none. */
   avgTotalUah: number | null;
   telegramSent: number;
   telegramFailed: number;
@@ -103,9 +103,9 @@ export function summarize(leads: readonly LeadRow[], now: Date = new Date()): Su
   let pending = 0;
   for (const l of leads) {
     if (dayKey(new Date(l.created_at)) === todayKey) today += 1;
-    const total = payloadOf(l).total_uah;
-    if (typeof total === "number" && total > 0) {
-      sum += total;
+    const total = leadSum(l);
+    if (total && total.mid > 0) {
+      sum += total.mid;
       withSum += 1;
     }
     if (l.telegram_status === "sent") sent += 1;
@@ -213,16 +213,20 @@ export function countBy(leads: readonly LeadRow[], labelOf: (lead: LeadRow) => s
   return rest > 0 ? [...head, { label: OTHER_LABEL, count: rest, percent: pct(rest), other: true }] : head;
 }
 
-export const SCOPE_LABEL: Record<string, string> = {
-  individual: "Окремі зуби",
-  one_jaw: "Одна щелепа",
-  both_jaws: "Обидві щелепи",
-  unknown: "Не знаю",
-};
+/** Same as countBy over a flat list of labels (e.g. one entry per jaw); percent is of the list length. */
+export function countLabels(labels: readonly string[], top: number = TOP_N): BreakdownRow[] {
+  const fake = labels.map((label, i) => ({ id: String(i), payload: { label }, phone: null, telegram_status: "sent", created_at: "" }) as LeadRow);
+  return countBy(fake, (l) => (l.payload as { label: string }).label, top);
+}
+
+// ───────────── LeadPayload v3 readers ─────────────
+// v3: upperJawInput/lowerJawInput, upperJawCalculation/lowerJawCalculation, overallTotal.
+// Older v2 leads (scenario.scope / total_uah) are still readable.
 
 export const INTENT_LABEL: Record<string, string> = {
+  dental_tender: "Dental Tender",
   refine: "Уточнити розрахунок",
-  send_calculation: "Надіслати розрахунок",
+  send_calculation: "Надіслати розрахунок (v2)",
 };
 
 export const TIER_NAME: Record<string, string> = {
@@ -231,20 +235,83 @@ export const TIER_NAME: Record<string, string> = {
   premium: "Преміальний",
 };
 
+/** JawScenarioKind → Ukrainian. */
+export const JAW_SCENARIO_LABEL: Record<string, string> = {
+  single: "1 зуб",
+  adjacent: "2–6 зубів поруч",
+  separate: "2–6 зубів окремо",
+  adjacent_or_separate: "2–6 зубів (поруч або окремо)",
+  installed: "Імпланти вже встановлені",
+  bridges: "7–14: мости",
+  aox4: "All-on-4",
+  aox6: "All-on-6",
+  aox8: "All-on-8",
+  reference_single: "Довідкова ціна 1 зуба",
+};
+
+const JAW_NAME = { upper: "Верхня щелепа", lower: "Нижня щелепа" } as const;
+const LEGACY_SCOPE_LABEL: Record<string, string> = {
+  individual: "Окремі зуби",
+  one_jaw: "Одна щелепа",
+  both_jaws: "Обидві щелепи",
+  unknown: "Не знаю",
+};
+
+/** Active jaws of a lead (calculation present, or input with teeth > 0). */
+export function activeJaws(lead: LeadRow): Array<"upper" | "lower"> {
+  const p = payloadOf(lead);
+  const jaws: Array<"upper" | "lower"> = [];
+  for (const jaw of ["upper", "lower"] as const) {
+    const calc = obj(p[`${jaw}JawCalculation`]);
+    const input = obj(p[`${jaw}JawInput`]);
+    const teeth = typeof input.tooth_count === "number" ? input.tooth_count : typeof calc.tooth_count === "number" ? calc.tooth_count : 0;
+    if (Object.keys(calc).length > 0 || teeth > 0) jaws.push(jaw);
+  }
+  return jaws;
+}
+
+export interface LeadSum {
+  low: number;
+  high: number;
+  mid: number;
+}
+
+/** overallTotal (v3) → legacy total_uah (v2). Null when the lead has no price. */
+export function leadSum(lead: LeadRow): LeadSum | null {
+  const p = payloadOf(lead);
+  const overall = obj(p.overallTotal);
+  if (typeof overall.low === "number") {
+    const high = typeof overall.high === "number" ? overall.high : overall.low;
+    return { low: overall.low, high, mid: (overall.low + high) / 2 };
+  }
+  const legacy = p.total_uah;
+  return typeof legacy === "number" && legacy > 0 ? { low: legacy, high: legacy, mid: legacy } : null;
+}
+
 export function cityOf(lead: LeadRow): string {
   return str(obj(payloadOf(lead).location).name) ?? "Не вказано";
 }
 
-/** scenario.scope → Ukrainian; falls back to scenario.kind and jaws count. */
+/** Which jaws the patient asked about: «Верхня щелепа» / «Нижня щелепа» / «Обидві щелепи». */
 export function scenarioOf(lead: LeadRow): string {
-  const scenario = obj(payloadOf(lead).scenario);
-  const scope = str(scenario.scope);
-  if (scope && SCOPE_LABEL[scope]) return SCOPE_LABEL[scope];
-  const kind = str(scenario.kind);
-  if (kind && SCOPE_LABEL[kind]) return SCOPE_LABEL[kind];
-  if (scenario.jaws === 2) return SCOPE_LABEL.both_jaws;
-  if (scenario.jaws === 1) return SCOPE_LABEL.one_jaw;
-  return "Не знаю";
+  const jaws = activeJaws(lead);
+  if (jaws.length === 2) return "Обидві щелепи";
+  if (jaws.length === 1) return JAW_NAME[jaws[0]];
+  const legacy = str(obj(payloadOf(lead).scenario).scope);
+  if (legacy && LEGACY_SCOPE_LABEL[legacy]) return LEGACY_SCOPE_LABEL[legacy];
+  return "Не вказано";
+}
+
+/** Per-jaw treatment schemes of a lead (1 or 2 items). */
+export function jawSchemesOf(lead: LeadRow): string[] {
+  const p = payloadOf(lead);
+  const out: string[] = [];
+  for (const jaw of ["upper", "lower"] as const) {
+    const calc = obj(p[`${jaw}JawCalculation`]);
+    const kind = str(calc.scenario);
+    if (kind) out.push(JAW_SCENARIO_LABEL[kind] ?? kind);
+  }
+  return out;
 }
 
 export function intentOf(lead: LeadRow): string {
@@ -252,13 +319,23 @@ export function intentOf(lead: LeadRow): string {
   return intent ? (INTENT_LABEL[intent] ?? intent) : "Не вказано";
 }
 
-/** "implant / crown-or-arch" tier pair, e.g. "Класичний / Мінімальний". */
+const tierName = (t: unknown) => (typeof t === "string" ? (TIER_NAME[t] ?? t) : "—");
+
+/** "implant / crown-or-arch" tier pair; "Різні для щелеп" when the two jaws differ. */
 export function tiersOf(lead: LeadRow): string {
   const p = payloadOf(lead);
-  const imp = str(p.implant_tier);
-  const crown = str(p.crown_or_arch_tier);
-  const name = (t: string | null) => (t ? (TIER_NAME[t] ?? t) : "—");
-  return `${name(imp)} / ${name(crown)}`;
+  const pairs: string[] = [];
+  for (const jaw of ["upper", "lower"] as const) {
+    const input = obj(p[`${jaw}JawInput`]);
+    if (typeof input.tooth_count === "number" && input.tooth_count <= 0) continue;
+    if (input.implant_tier || input.crown_or_arch_tier) pairs.push(`${tierName(input.implant_tier)} / ${tierName(input.crown_or_arch_tier)}`);
+  }
+  if (pairs.length === 0) {
+    // v2 flat payload
+    if (p.implant_tier || p.crown_or_arch_tier) return `${tierName(p.implant_tier)} / ${tierName(p.crown_or_arch_tier)}`;
+    return "—";
+  }
+  return pairs.every((x) => x === pairs[0]) ? pairs[0] : "Різні для щелеп";
 }
 
 export function sourceOf(lead: LeadRow): string {
@@ -268,6 +345,7 @@ export function sourceOf(lead: LeadRow): string {
 export interface Breakdowns {
   cities: BreakdownRow[];
   scenarios: BreakdownRow[];
+  schemes: BreakdownRow[];
   intents: BreakdownRow[];
   tiers: BreakdownRow[];
   sources: BreakdownRow[];
@@ -277,6 +355,7 @@ export function breakdowns(leads: readonly LeadRow[]): Breakdowns {
   return {
     cities: countBy(leads, cityOf),
     scenarios: countBy(leads, scenarioOf),
+    schemes: countLabels(leads.flatMap(jawSchemesOf)),
     intents: countBy(leads, intentOf),
     tiers: countBy(leads, tiersOf),
     sources: countBy(leads, sourceOf),

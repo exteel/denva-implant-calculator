@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { LeadPayload as ContractLead, SubmitLeadResponse } from "../../src/lib/contracts";
-import { formatLeadMessage, escapeHtml, formatUah, sendTelegramMessage, isArchLead, parseMigrateToChatId } from "../functions/_shared/telegram";
-import type { LeadPayload, FetchLike } from "../functions/_shared/telegram";
+import {
+  formatLeadMessage, escapeHtml, formatUah, formatMoney, sendTelegramMessage, parseMigrateToChatId,
+} from "../functions/_shared/telegram";
+import type { FetchLike } from "../functions/_shared/telegram";
+import type { JawCalculation, JawInput, LeadPayload } from "../functions/_shared/lead-types";
 import { validateLead } from "../functions/_shared/lead";
 import {
   handleSubmitLead, isOriginAllowed, RateLimitedError, PUBLIC_RETRY_WINDOW_MS,
@@ -10,63 +13,114 @@ import {
 } from "../functions/_shared/handler";
 import { parseNbuDate, parseNbuRate } from "../functions/_shared/nbu";
 
-// Типи функції мають бути взаємно сумісні з контрактом
+// Типи функції мають бути взаємно сумісні з контрактом v3
 const _toShared = (l: ContractLead): LeadPayload => l;
 const _toContract = (l: LeadPayload): ContractLead => l;
 void _toShared; void _toContract;
 
+const jawInput = (over: Partial<JawInput> = {}): JawInput => ({
+  jaw: "upper", tooth_count: 3, location: "adjacent", status: "removed", installed_implant_count: null, scenario: null,
+  implant_tier: "classic", crown_or_arch_tier: "minimum", include_temporary: false, ...over,
+});
+const calc = (over: Partial<JawCalculation> = {}): JawCalculation => ({
+  jaw: "upper", tooth_count: 3, scenario: "adjacent", implant_count: { low: 2, high: 2 }, prosthetic_units: 3,
+  first_stage: null, permanent_stage: null, total: { low: 123456, high: 123456 }, components: [], alternatives: [], missing_codes: [], ...over,
+});
 const lead = (over: Partial<LeadPayload> = {}): LeadPayload => ({
-  intent: "refine",
+  intent: "dental_tender",
   phone: "+380671234567",
   location: { kind: "city", id: "kyiv", name: "Київ" },
-  scenario: { kind: "teeth", count: 3, arrangement: "adjacent" },
-  scenario_label: "3 зуби поруч (міст)",
-  answers: { teeth: 3, arrangement: "adjacent" },
-  implant_tier: "classic",
-  crown_or_arch_tier: "minimum",
-  total_uah: 123456,
-  price_source: "на основі прайсів 3 клінік",
-  page_url: "https://exteel.github.io/denva-implant-calculator/calculator/?utm_source=ig",
+  answers: { "Стан зубів": "уже видалені", "Розташування": "поруч" },
+  scenario_label: "Верхня: 3 зуби поруч",
+  upperJawInput: jawInput(),
+  lowerJawInput: null,
+  upperJawCalculation: calc(),
+  lowerJawCalculation: null,
+  overallTotal: { low: 123456, high: 123456 },
+  price_source: "Розраховано на основі перевірених прайсів 3 клінік міста",
+  page_url: "https://exteel.github.io/denva-implant-calculator/implant-calculator/kyiv/?utm_source=ig",
   utm: { utm_source: "ig", utm_campaign: "autumn" },
-  created_at: "2026-10-13T10:00:00.000Z",
+  created_at: "2026-10-17T10:00:00.000Z",
   ...over,
 });
+const plain = (t: string) => t.replace(/\u00a0/g, " ");
 
-describe("Telegram: форматування заявки (ТЗ §6.3)", () => {
-  it("містить усі поля", () => {
-    const t = formatLeadMessage(lead());
+describe("Telegram v3: форматування заявки (ТЗ §6.3)", () => {
+  it("заголовок: intent, телефон, місто, відповіді; блок щелепи; загальна сума; джерело, URL, UTM", () => {
+    const t = plain(formatLeadMessage(lead()));
     for (const part of [
-      "Нова заявка DENVA AI", "Уточнити розрахунок", "+380671234567", "Місто:</b> Київ", "3 зуби поруч (міст)",
-      "teeth: 3", "arrangement: adjacent", "Рівень імпланта:</b> Класичний", "Рівень коронки:</b> Мінімальний",
-      "123 456 грн", "на основі прайсів 3 клінік", "https://exteel.github.io/denva-implant-calculator/calculator/?utm_source=ig",
-      "utm_source=ig, utm_campaign=autumn", "2026-10-13T10:00:00.000Z",
+      "Нова заявка DENVA AI", "Запит:</b> Хоче персональні пропозиції клінік (Dental Tender)", "+380671234567",
+      "Місто:</b> Київ", "• Стан зубів: уже видалені", "• Розташування: поруч",
+      "<b>Верхня щелепа</b>", "• Зубів: 3", "• Сценарій: Зуби поруч (міст)", "• Імплантів: 2",
+      "• Рівень імпланта: Класичний", "• Рівень коронки: Мінімальний", "• Разом: 123 456 грн",
+      "Загальна сума:</b> 123 456 грн", "Джерело ціни:</b> Розраховано на основі перевірених прайсів 3 клінік міста",
+      "https://exteel.github.io/denva-implant-calculator/implant-calculator/kyiv/?utm_source=ig",
+      "utm_source=ig, utm_campaign=autumn", "2026-10-17T10:00:00.000Z",
     ]) expect(t, part).toContain(part);
+    expect(t).not.toContain("Нижня щелепа");
+    // порядок: шапка → відповіді → щелепи → сума → джерело
+    expect(t.indexOf("Відповіді")).toBeLessThan(t.indexOf("Верхня щелепа"));
+    expect(t.indexOf("Верхня щелепа")).toBeLessThan(t.indexOf("Загальна сума"));
+    expect(t.indexOf("Загальна сума")).toBeLessThan(t.indexOf("Джерело ціни"));
   });
 
-  it("intent «Надіслати розрахунок і питання»; область замість міста", () => {
-    const t = formatLeadMessage(lead({ intent: "send_calculation", location: { kind: "region", id: "lvivska", name: "Львівська область" } }));
-    expect(t).toContain("Надіслати розрахунок і питання");
+  it("intent refine = «Уточнити розрахунок»; область замість міста", () => {
+    const t = formatLeadMessage(lead({ intent: "refine", location: { kind: "region", id: "lvivska", name: "Львівська область" } }));
+    expect(t).toContain("Запит:</b> Уточнити розрахунок");
     expect(t).toContain("Область:</b> Львівська область");
   });
 
-  it("повна щелепа: перший етап, повне лікування, рівень конструкції", () => {
-    const l = lead({ scenario: { kind: "arch", jaws: 1, variant: "all-on-4" }, total_uah: 300000, full_treatment_uah: 480000, crown_or_arch_tier: "premium" });
-    expect(isArchLead(l)).toBe(true);
-    const t = formatLeadMessage(l);
-    expect(t).toContain("Рівень постійної конструкції:</b> Преміальний");
-    expect(t).toContain("Сума (перший етап):</b> 300 000 грн");
-    expect(t).toContain("Повне лікування:</b> 480 000 грн");
-    expect(t).not.toContain("Рівень коронки");
+  it("дві щелепи: окремі блоки з власними рівнями; All-on-N — перший етап, постійна конструкція, разом", () => {
+    const t = plain(formatLeadMessage(lead({
+      upperJawInput: jawInput({ jaw: "upper", tooth_count: 14, implant_tier: "premium", crown_or_arch_tier: "premium", scenario: "aox4", include_temporary: true }),
+      upperJawCalculation: calc({
+        scenario: "aox4", tooth_count: 14, implant_count: { low: 4, high: 4 },
+        first_stage: { low: 300000, high: 300000 }, permanent_stage: { low: 180000, high: 210000 }, total: { low: 480000, high: 510000 },
+      }),
+      lowerJawInput: jawInput({ jaw: "lower", tooth_count: 1, implant_tier: "minimum", crown_or_arch_tier: "classic" }),
+      lowerJawCalculation: calc({ jaw: "lower", scenario: "single", tooth_count: 1, implant_count: { low: 1, high: 1 }, total: { low: 30000, high: 30000 } }),
+      overallTotal: { low: 510000, high: 540000 },
+    })));
+    const upper = t.slice(t.indexOf("Верхня щелепа"), t.indexOf("Нижня щелепа"));
+    const lower = t.slice(t.indexOf("Нижня щелепа"), t.indexOf("Загальна сума"));
+    expect(upper).toContain("• Сценарій: All-on-4");
+    expect(upper).toContain("• Рівень постійної конструкції: Преміальний");
+    expect(upper).not.toContain("Рівень коронки");
+    expect(upper).toContain("• Тимчасове протезування: враховано");
+    expect(upper).toContain("• Перший етап: 300 000 грн");
+    expect(upper).toContain("• Постійна конструкція: 180 000–210 000 грн");
+    expect(upper).toContain("• Разом: 480 000–510 000 грн");
+    expect(lower).toContain("• Зубів: 1");
+    expect(lower).toContain("• Сценарій: Один зуб");
+    expect(lower).toContain("• Рівень імпланта: Мінімальний");
+    expect(lower).toContain("• Рівень коронки: Класичний");
+    expect(lower).not.toContain("Перший етап");
+    expect(t).toContain("Загальна сума:</b> 510 000–540 000 грн");
   });
 
-  it("діапазон суми зі scenario.total_range_uah", () => {
-    const t = formatLeadMessage(lead({ scenario: { kind: "multi", total_range_uah: [82100, 107400] }, total_uah: 82100 }));
-    expect(t.replace(/\u00a0/g, " ")).toContain("Сума:</b> 82 100 грн – 107 400 грн");
+  it("лише нижня щелепа; діапазон кількості імплантів; без ціни — «розрахунок недоступний»", () => {
+    const t = plain(formatLeadMessage(lead({
+      upperJawInput: jawInput({ jaw: "upper", tooth_count: 0 }), upperJawCalculation: null,
+      lowerJawInput: jawInput({ jaw: "lower", tooth_count: 4 }),
+      lowerJawCalculation: calc({ jaw: "lower", scenario: "adjacent_or_separate", implant_count: { low: 2, high: 4 }, total: { low: 80000, high: 120000 } }),
+      overallTotal: { low: 80000, high: 120000 },
+    })));
+    expect(t).not.toContain("Верхня щелепа");
+    expect(t).toContain("• Імплантів: 2–4");
+    expect(t).toContain("• Сценарій: Діапазон: поруч або окремо");
+    const noPrice = plain(formatLeadMessage(lead({ upperJawCalculation: null, overallTotal: null })));
+    expect(noPrice).toContain("• Розрахунок: недоступний (бракує цін)");
+    expect(noPrice).toContain("Загальна сума:</b> не розрахована");
   });
 
-  it("7+ зубів (kind seven_plus від калькулятора) — теж повна щелепа, навіть без full_treatment_uah", () => {
-    expect(isArchLead(lead({ scenario: { kind: "seven_plus", all_on: 4 }, full_treatment_uah: null }))).toBe(true);
-    expect(isArchLead(lead({ scenario: { kind: "multi" }, full_treatment_uah: null }))).toBe(false);
+  it("стара заявка v2 (без блоків щелеп) не ламає відправку", () => {
+    const legacy = { intent: "send_calculation", phone: "0671234567", location: { kind: "city", id: "kyiv", name: "Київ" },
+      answers: {}, implant_tier: "classic", crown_or_arch_tier: "minimum", total_uah: 99000, price_source: "x", page_url: "u", utm: {},
+      created_at: "2026-10-13T10:00:00Z", scenario_label: "1 зуб" } as unknown as LeadPayload;
+    const t = plain(formatLeadMessage(legacy));
+    expect(t).toContain("Надіслати розрахунок і питання");
+    expect(t).toContain("Рівень імпланта:</b> Класичний");
+    expect(t).toContain("Сума:</b> 99 000 грн");
   });
 
   it("екранує HTML у всіх вільних полях", () => {
@@ -93,10 +147,11 @@ describe("Telegram: форматування заявки (ТЗ §6.3)", () => {
     expect(formatLeadMessage(lead({ answers })).length).toBeLessThanOrEqual(4096);
   });
 
-  it("escapeHtml / formatUah", () => {
+  it("escapeHtml / formatUah / formatMoney", () => {
     expect(escapeHtml(`<a href="x">&</a>`)).toBe(`&lt;a href="x"&gt;&amp;&lt;/a&gt;`);
-    expect(formatUah(1234567.4)).toBe("1 234 567 грн");
-    expect(formatUah(900)).toBe("900 грн");
+    expect(plain(formatUah(1234567.4))).toBe("1 234 567 грн");
+    expect(plain(formatMoney({ low: 100000.2, high: 100000.4 }))).toBe("100 000 грн");
+    expect(plain(formatMoney({ low: 100000, high: 120500 }))).toBe("100 000–120 500 грн");
   });
 
   it("sendTelegramMessage: HTML parse mode, токен не витікає в помилку", async () => {
@@ -120,20 +175,53 @@ describe("Telegram: форматування заявки (ТЗ §6.3)", () => {
   });
 });
 
-describe("Валідація заявки", () => {
-  it("приймає коректну і нормалізує", () => {
+describe("Валідація заявки v3", () => {
+  it("приймає коректну, відкидає сторонні поля", () => {
     const r = validateLead({ ...lead(), junk: "x" });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.lead).not.toHaveProperty("junk");
+    if (r.ok) {
+      expect(r.lead).not.toHaveProperty("junk");
+      expect(r.lead.upperJawCalculation?.total).toEqual({ low: 123456, high: 123456 });
+    }
   });
-  it("відхиляє короткий телефон, невідомий intent, відсутні поля", () => {
-    expect(validateLead(lead({ phone: "12345" }))).toMatchObject({ ok: false });
-    expect(validateLead({ ...lead(), intent: "buy" })).toMatchObject({ ok: false });
+
+  it("intent: dental_tender і refine; старий send_calculation відхиляється", () => {
+    expect(validateLead(lead({ intent: "refine" })).ok).toBe(true);
+    expect(validateLead({ ...lead(), intent: "send_calculation" }).ok).toBe(false);
+    expect(validateLead({ ...lead(), intent: "buy" }).ok).toBe(false);
+  });
+
+  it("телефон ≥ 10 цифр, обов'язкові поля, джерело ціни", () => {
+    expect(validateLead(lead({ phone: "12345" })).ok).toBe(false);
     const r = validateLead({ intent: "refine", phone: "0671234567" });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.length).toBeGreaterThan(3);
-    expect(validateLead(null)).toMatchObject({ ok: false });
-    expect(validateLead({ ...lead(), implant_tier: "gold" })).toMatchObject({ ok: false });
+    if (!r.ok) expect(r.errors.length).toBeGreaterThanOrEqual(2);
+    expect(validateLead(null).ok).toBe(false);
+    expect(validateLead(lead({ price_source: "" })).ok).toBe(false);
+  });
+
+  it("щелепи: tooth_count 0–14, хоча б одна активна, рівні лише для активної щелепи", () => {
+    expect(validateLead(lead({ upperJawInput: jawInput({ tooth_count: 15 }) })).ok).toBe(false);
+    expect(validateLead(lead({ upperJawInput: jawInput({ tooth_count: 2.5 }) })).ok).toBe(false);
+    expect(validateLead(lead({ upperJawInput: jawInput({ tooth_count: 0 }), lowerJawInput: null })).ok).toBe(false);
+    expect(validateLead(lead({ upperJawInput: null, lowerJawInput: null })).ok).toBe(false);
+    expect(validateLead({ ...lead(), upperJawInput: { ...jawInput(), implant_tier: "gold" } }).ok).toBe(false);
+    // 0 зубів: рівні не обов'язкові
+    const zero = validateLead({ ...lead(), upperJawInput: { jaw: "upper", tooth_count: 0 }, lowerJawInput: jawInput({ jaw: "lower", tooth_count: 2 }),
+      lowerJawCalculation: calc({ jaw: "lower" }) });
+    expect(zero.ok).toBe(true);
+    // jaw має відповідати полю
+    expect(validateLead({ ...lead(), upperJawInput: { ...jawInput(), jaw: "lower" } }).ok).toBe(false);
+  });
+
+  it("розрахунок і сума: коректні діапазони, інакше помилка", () => {
+    expect(validateLead(lead({ overallTotal: { low: 10, high: 5 } })).ok).toBe(false);
+    expect(validateLead(lead({ overallTotal: { low: -1, high: 5 } })).ok).toBe(false);
+    expect(validateLead(lead({ overallTotal: null })).ok).toBe(true);
+    expect(validateLead({ ...lead(), upperJawCalculation: { scenario: "x" } }).ok).toBe(false);
+    expect(validateLead({ ...lead(), upperJawCalculation: { ...calc(), total: "100" } }).ok).toBe(false);
+    const withAlt = validateLead(lead({ upperJawCalculation: calc({ alternatives: [calc(), calc({ scenario: "aox4" })] }) }));
+    expect(withAlt.ok && withAlt.lead.upperJawCalculation?.alternatives).toHaveLength(2);
   });
 });
 

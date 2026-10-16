@@ -14,6 +14,9 @@ import type { PostgrestError } from "@supabase/supabase-js";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import type {
   AdminPriceMatrixRow,
+  CityPageContent,
+  SeoStatus,
+  TierSource,
   AggregateDetail,
   AggregationMethod,
   ClinicPriceStatus,
@@ -43,13 +46,29 @@ export interface City {
   active: boolean;
   aliases: string[] | null;
   min_clinics: number | null;
+  /** URL slug of /implant-calculator/{slug}/ (unique; equals id by default). */
+  slug?: string | null;
+  seo_status?: SeoStatus | null;
+  // editorial content of the city page — separate columns of `cities` (migration 08 §7)
+  intro?: string | null;
+  faq?: Array<{ q: string; a: string }> | null;
+  local_notes?: string | null;
+  reviewer_name?: string | null;
+  reviewer_url?: string | null;
+  reviewed_at?: string | null;
+  content_is_demo?: boolean | null;
 }
 export interface Service {
   service_code: string;
   name: string;
+  /** Template «Категорія». */
+  category?: string | null;
   role: ServiceRole;
   unit: string;
   tiered: boolean;
+  tier_source?: TierSource | null;
+  /** diagnostic / removal / addon — shown as «Що може знадобитися додатково», never in the total. */
+  additional?: boolean;
   included_text: string | null;
   active: boolean;
   sort: number;
@@ -62,6 +81,15 @@ export interface Clinic {
   status: ClinicStatus;
   verified_at: string | null;
   contacts: unknown;
+  region?: string | null;
+  address?: string | null;
+  contact_person?: string | null;
+  /** Участь у Dental Tender. */
+  dental_tender?: boolean | null;
+  /** Згода на публічний профіль. */
+  public_profile_consent?: boolean | null;
+  /** «Підтверджую достовірність» from the template. */
+  data_confirmed?: boolean | null;
   is_demo?: boolean;
 }
 export interface ClinicPrice {
@@ -118,6 +146,9 @@ export interface PriceModeRow {
   service_code: string;
   tier: Tier;
   mode: PriceMode;
+  /** Value published while mode = manual_override. */
+  override_value?: number | null;
+  override_reason?: string | null;
 }
 export interface AdminUser {
   user_id: string;
@@ -173,8 +204,13 @@ export interface AggregateSnapshot {
   service_code: string;
   tier: Tier;
   value: number | null;
+  /** city_aggregates keeps the column name `clinic_count`. */
   clinic_count: number;
-  method: AggregationMethod;
+  local_median: number | null;
+  baseline_value: number | null;
+  baseline_scope: string | null;
+  blend_weights: { local: number; baseline: number } | null;
+  formula: string | null;
   calculated_at: string;
   seq?: number;
   included?: AggregateDetail["included"];
@@ -187,7 +223,7 @@ export interface PublishedHistoryRow {
   previous_value: number | null;
   currency: string | null;
   source_type: string | null;
-  clinic_count: number | null;
+  local_clinic_count: number | null;
   aggregation_method: string | null;
   calculated_at: string | null;
   published_at: string;
@@ -277,6 +313,45 @@ export const saveRegion = (region: Region, reason?: string) => upsertRow<Region>
 export const listCities = () => unwrapList<City>(db().from("cities").select("*").order("name"));
 
 export const saveCity = (city: City, reason?: string) => upsertRow<City>("cities", city, reason);
+
+export interface CityPageInput {
+  slug: string;
+  seo_status: SeoStatus;
+  content: CityPageContent;
+  /** true when the editorial content was edited → it is no longer seed/demo text. */
+  contentChanged?: boolean;
+}
+
+/** SEO settings + editorial content of a city page (admin_upsert_row keeps the other city columns). */
+export const saveCityPage = (cityId: string, input: CityPageInput, reason?: string) =>
+  upsertRow<City>(
+    "cities",
+    {
+      id: cityId,
+      slug: input.slug,
+      seo_status: input.seo_status,
+      intro: input.content.intro,
+      faq: input.content.faq,
+      local_notes: input.content.local_notes,
+      reviewer_name: input.content.reviewer_name,
+      reviewer_url: input.content.reviewer_url,
+      reviewed_at: input.content.reviewed_at,
+      ...(input.contentChanged ? { content_is_demo: false } : {}),
+    },
+    reason,
+  );
+
+/** The city's stored editorial fields as CityPageContent. */
+export function cityContent(city: City): CityPageContent {
+  return {
+    intro: city.intro ?? null,
+    faq: city.faq ?? [],
+    local_notes: city.local_notes ?? null,
+    reviewer_name: city.reviewer_name ?? null,
+    reviewer_url: city.reviewer_url ?? null,
+    reviewed_at: city.reviewed_at ?? null,
+  };
+}
 
 // ───────────── services ─────────────
 
@@ -405,13 +480,16 @@ export const listImportBatches = () =>
 
 // ───────────── manual benchmarks + modes ─────────────
 
-export type BenchmarkScope = "city" | "region";
+/** «Базові ціни»: three levels, resolved city → region → country when publishing. */
+export type BenchmarkScope = "country" | "region" | "city";
 
 export const listManualPrices = (scope: BenchmarkScope, id: string) =>
   unwrapList<ManualPrice>(
-    scope === "city"
-      ? db().from("city_manual_prices").select("*").eq("city_id", id)
-      : db().from("region_manual_prices").select("*").eq("region_id", id),
+    scope === "country"
+      ? db().from("country_manual_prices").select("*")
+      : scope === "city"
+        ? db().from("city_manual_prices").select("*").eq("city_id", id)
+        : db().from("region_manual_prices").select("*").eq("region_id", id),
   );
 
 export const listPriceModes = (cityId: string) =>
@@ -422,18 +500,25 @@ export interface BenchmarkChange {
   tier: Tier;
   /** undefined = untouched, null = clear, number = set */
   value?: number | null;
+  /** City scope only. */
   mode?: PriceMode;
+  /** Required with mode = manual_override: the value to publish. */
+  overrideValue?: number | null;
 }
 
-/** Applies cell changes for one city/region through the admin_set_* RPCs (they carry the reason). */
+/**
+ * Applies cell changes through the admin_set_* RPCs (they carry the reason into audit_log).
+ * Overriding a published price needs a value and a reason (ТЗ §2.3) — enforced here too.
+ */
 export async function saveBenchmarks(scope: BenchmarkScope, id: string, changes: BenchmarkChange[], reason?: string): Promise<void> {
   const p_reason = clean(reason);
   for (const c of changes) {
     if (c.value !== undefined) {
-      const fn = scope === "city" ? "admin_set_city_manual_price" : "admin_set_region_manual_price";
+      const fn = { country: "admin_set_country_manual_price", region: "admin_set_region_manual_price", city: "admin_set_city_manual_price" }[scope];
+      const target = scope === "city" ? { p_city_id: id } : scope === "region" ? { p_region_id: id } : { p_country_id: "UA" };
       await exec(
         db().rpc(fn, {
-          [scope === "city" ? "p_city_id" : "p_region_id"]: id,
+          ...target,
           p_service_code: c.service_code,
           p_tier: c.tier,
           p_value: c.value,
@@ -444,12 +529,19 @@ export async function saveBenchmarks(scope: BenchmarkScope, id: string, changes:
       );
     }
     if (scope === "city" && c.mode !== undefined) {
+      if (c.mode === "manual_override") {
+        if (!(typeof c.overrideValue === "number" && c.overrideValue > 0)) {
+          throw new AdminApiError({ message: `Override для ${c.service_code} (${c.tier}) потребує значення більше нуля.` });
+        }
+        if (!p_reason) throw new AdminApiError({ message: "Override потребує причини зміни." });
+      }
       await exec(
         db().rpc("admin_set_price_mode", {
           p_city_id: id,
           p_service_code: c.service_code,
           p_tier: c.tier,
           p_mode: c.mode,
+          p_override_value: c.mode === "manual_override" ? c.overrideValue : null,
           p_reason,
         }),
       );
@@ -505,6 +597,7 @@ export const AUDIT_TABLES = [
   "clinic_prices",
   "city_manual_prices",
   "region_manual_prices",
+  "country_manual_prices",
   "price_modes",
   "settings",
   "currency_rates",

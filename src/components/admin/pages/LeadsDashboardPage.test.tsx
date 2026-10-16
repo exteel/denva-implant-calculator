@@ -10,13 +10,13 @@ const rows = vi.hoisted(() => {
     telegram_status: "sent",
     attempts: 1,
     created_at: at(daysAgo),
-    payload: { intent: "refine", location: { name: "Львів" }, scenario: { scope: "individual" }, implant_tier: "classic", crown_or_arch_tier: "classic", utm: {}, ...payload },
+    payload: { intent: "refine", location: { name: "Львів" }, upperJawInput: { tooth_count: 1, implant_tier: "classic", crown_or_arch_tier: "classic" }, upperJawCalculation: { scenario: "single", tooth_count: 1 }, lowerJawInput: null, lowerJawCalculation: null, utm: {}, ...payload },
     ...extra,
   });
   return [
-    mk("a", 0, { total_uah: 100000, utm: { utm_source: "google" } }),
-    mk("b", 1, { total_uah: 200000, location: { name: "Київ" }, scenario: { scope: "one_jaw" } }, { telegram_status: "failed" }),
-    mk("c", 40, { total_uah: 50000 }),
+    mk("a", 0, { overallTotal: { low: 100000, high: 100000 }, utm: { utm_source: "google" } }),
+    mk("b", 1, { overallTotal: { low: 200000, high: 200000 }, location: { name: "Київ" } }, { telegram_status: "failed" }),
+    mk("c", 40, { overallTotal: { low: 50000, high: 50000 } }),
     mk("t", 0, { scenario_label: "ТЕСТОВА заявка" }, { phone: "+380000000000" }),
   ];
 });

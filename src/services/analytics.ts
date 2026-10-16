@@ -1,14 +1,17 @@
-/** DENVA AI v2 calculator funnel events. */
+/** DENVA AI v3 calculator funnel events (ТЗ §11.9: start, completion, voluntary lead). */
 export type AnalyticsEvent =
   | "calculator_started"
   | "city_selected"
-  | "scope_selected"
-  | "teeth_count_selected"
-  | "followup_answered"
+  | "counts_continue"
+  | "unknown_scope_selected"
+  | "question_answered"
   | "result_viewed"
-  | "tier_card_selected"
+  | "calculation_completed"
   | "tier_toggled"
-  | "all_on_selected"
+  | "tier_preset_applied"
+  | "scenario_selected"
+  | "temporary_toggled"
+  | "currency_changed"
   | "params_changed"
   | "lead_cta_clicked"
   | "lead_submitted"

@@ -1,5 +1,14 @@
 # Supabase-бекенд DENVA AI
 
+> **v3 (ТЗ 3.3).** Міграції `20261017000008…11` переводять v2 → v3: каталог із 29 кодів шаблону клініки, baseline
+> міста/області/України (`country_manual_prices`), публікація `aggregate` (n ≥ 3, медіана) / `hybrid` (n = 1, 2:
+> ⅓ локальна + ⅔ baseline, ⅔ медіана + ⅓ baseline) / `manual_baseline` / `regional_fallback` / `national_fallback`,
+> `manual_override` лише з причиною, SEO-поля міст (`slug`, `seo_status`, контент) і RPC `get_city_pages()`,
+> картка клініки (регіон, адреса, Dental Tender, згода), заявки `dental_tender | refine`. Міграція `…10` перетворює
+> демо-дані живої бази v2 (лише там, де є демо-міста); `seed.sql` дає той самий стан на чистій базі.
+> Старі міграції 01–07 не змінюються. Порогове значення вибірки — `settings.min_clinics` (або `cities.min_clinics`);
+> вага локальних даних у гібриді = n / поріг.
+
 Усе, що живе на сервері: схема бази, SQL-логіка цін, демо-дані та дві Edge Functions.
 Контракт з фронтендом — `src/lib/contracts.ts`; ТЗ — `docs/TZ_v2_DENVA_AI.txt`; дизайн — `docs/ARCHITECTURE_v2.md`.
 

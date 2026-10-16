@@ -1,7 +1,5 @@
-import type { LeadIntent, LeadPayload, LocationKind, PatientTier } from "@/lib/contracts";
-import type { Answers, Calculation, Params } from "@/engine/v2";
-import { scenarioLabel } from "@/engine/v2";
-import { FOLLOW_UPS, SCOPE_OPTIONS, SCOPE_QUESTION } from "@/engine/v2/flow";
+import type { LeadIntent, LeadPayload, LocationKind } from "@/lib/contracts";
+import type { LeadParts } from "@/components/calculator/model";
 
 /** UTM / click-id tags of the landing URL, kept for attribution (ТЗ §6.3). */
 export function readUtm(search: string): Record<string, string> {
@@ -28,60 +26,31 @@ export interface LeadContext {
   intent: LeadIntent;
   phone: string;
   location: { kind: LocationKind; id: string; name: string };
-  answers: Answers;
-  params: Params;
-  calculation: Calculation;
-  implantTier: PatientTier;
-  crownTier: PatientTier;
+  parts: LeadParts;
   pageUrl: string;
   search: string;
   now?: Date;
 }
 
-/** ТЗ §6.3: what the central Telegram team (and later Planfix) receives. */
+/**
+ * ТЗ §6.3 / ARCHITECTURE_v3 §3: what the central Telegram team receives —
+ * both JawInput / JawCalculation, overallTotal, readable answers, source
+ * sentence, URL and UTM. The phone is the only personal field.
+ */
 export function buildLeadPayload(ctx: LeadContext): LeadPayload {
-  const { params, calculation, answers } = ctx;
-  // Human-readable "question → answer" for the Telegram team; the
-  // machine-readable form travels in `scenario`.
-  const answerMap: Record<string, string | number> = {};
-  if (answers.scope) {
-    answerMap[SCOPE_QUESTION.title] =
-      SCOPE_OPTIONS.find((o) => o.id === answers.scope)?.label ?? answers.scope;
-  }
-  if (answers.scope === "individual" && answers.count !== undefined) {
-    answerMap["Кількість зубів"] = answers.count >= 7 ? "7+" : answers.count;
-  }
-  if (answers.followUp) {
-    const q = FOLLOW_UPS[answers.followUp.id];
-    answerMap[q.title] = q.options.find((o) => o.id === answers.followUp?.value)?.label ?? answers.followUp.value;
-  }
-
-  const scenario: Record<string, unknown> = {
-    kind: calculation.kind,
-    scope: params.scope,
-    teeth: params.teeth,
-    tooth_state: params.toothState,
-    arrangement: params.arrangement,
-    jaws: params.scope === "both_jaws" ? 2 : params.scope === "one_jaw" ? 1 : params.jaws,
-    all_on: params.allOn,
-    teeth_present: params.teethPresent,
-  };
-  if (calculation.main && calculation.main.low !== calculation.main.high) {
-    scenario.total_range_uah = [calculation.main.low, calculation.main.high];
-  }
-
+  const { parts } = ctx;
   return {
     intent: ctx.intent,
     phone: ctx.phone.trim(),
     location: ctx.location,
-    scenario,
-    scenario_label: scenarioLabel(params),
-    answers: answerMap,
-    implant_tier: ctx.implantTier,
-    crown_or_arch_tier: ctx.crownTier,
-    total_uah: calculation.main?.low ?? null,
-    full_treatment_uah: calculation.full?.low ?? null,
-    price_source: calculation.source?.label ?? "даних поки недостатньо",
+    answers: parts.answers,
+    scenario_label: parts.scenario_label,
+    upperJawInput: parts.inputs.upper,
+    lowerJawInput: parts.inputs.lower,
+    upperJawCalculation: parts.quote.upperJawCalculation,
+    lowerJawCalculation: parts.quote.lowerJawCalculation,
+    overallTotal: parts.quote.overallTotal,
+    price_source: parts.price_source,
     page_url: ctx.pageUrl,
     utm: readUtm(ctx.search),
     created_at: (ctx.now ?? new Date()).toISOString(),

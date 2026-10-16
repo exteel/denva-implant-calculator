@@ -127,3 +127,44 @@ describe("settings.telegram_chat_id_override (міграція 07)", () => {
     await expect(withRole(db, "anon", undefined, () => db.query("select telegram_chat_id_override from settings"))).rejects.toThrow(/permission denied/);
   });
 });
+
+describe("v3: baseline України, режим override, картка клініки", () => {
+  it("admin_set_country_manual_price: створення, оновлення, видалення з причиною; публікує рядки областей", async () => {
+    await call("select admin_set_country_manual_price('UA','IMPL','classic', 8000, null, null, 'старт')");
+    expect(await one(db, "select value::float8 as value, country_id from country_manual_prices")).toEqual({ value: 8000, country_id: "UA" });
+    expect(await scalar(db, "select value::float8 from published_prices where location_kind='region' and location_id='r1' and service_code='IMPL'")).toBe(8000);
+    expect(await scalar(db, "select count(*)::int from recalc_queue where service_code='IMPL' and tier='classic'")).toBe(3);
+    await call("select admin_set_country_manual_price('UA','IMPL','classic', 8500, null, null, 'інфляція')");
+    expect(await scalar(db, "select value::float8 from country_manual_prices")).toBe(8500);
+    expect(await scalar(db, "select reason from audit_log where table_name='country_manual_prices' and action='UPDATE'")).toBe("інфляція");
+    await call("select admin_set_country_manual_price('UA','IMPL','classic', null, null, null, 'прибрано')");
+    expect(await scalar(db, "select count(*)::int from country_manual_prices")).toBe(0);
+    expect(await scalar(db, "select count(*)::int from published_prices where location_kind='region'")).toBe(0);
+    await expect(withRole(db, "authenticated", USER_ID, () => db.query("select admin_set_country_manual_price('UA','IMPL','classic',1)"))).rejects.toThrow(/потрібна роль адміністратора/);
+  });
+
+  it("admin_set_price_mode: override потребує значення і причини; auto очищає їх", async () => {
+    await expect(call("select admin_set_price_mode('c1','IMPL','classic','manual_override', null, 'є причина')")).rejects.toThrow(/значення і причина/);
+    await expect(call("select admin_set_price_mode('c1','IMPL','classic','manual_override', 12000, '  ')")).rejects.toThrow(/значення і причина/);
+    await call("select admin_set_price_mode('c1','IMPL','classic','manual_override', 12000, 'редакційне рішення')");
+    expect(await one(db, "select mode, override_value::float8 as v, override_reason from price_modes")).toEqual({ mode: "manual_override", v: 12000, override_reason: "редакційне рішення" });
+    expect(await scalar(db, "select reason from audit_log where table_name='price_modes' and action='INSERT'")).toBe("редакційне рішення");
+    await db.exec("select process_recalc_queue(100)");
+    expect(await one(db, "select value::float8 as v, source_type from published_prices where location_id='c1' and service_code='IMPL'")).toEqual({ v: 12000, source_type: "manual_override" });
+    await call("select admin_set_price_mode('c1','IMPL','classic','auto')");
+    expect(await one(db, "select mode, override_value, override_reason from price_modes")).toEqual({ mode: "auto", override_value: null, override_reason: null });
+  });
+
+  it("картка клініки зберігає region, address, contact_person і прапорці Dental Tender / згода / підтвердження", async () => {
+    const c = await call<{ id: string }>("select admin_upsert_row('clinics', $1::jsonb, 'картка')", [JSON.stringify({
+      name: "Кл", city_id: "c1", region: "Область 1", address: "вул. А, 1", contact_person: "Петро",
+      dental_tender: true, public_profile_consent: true, data_confirmed: true })]);
+    expect(await one(db, "select region, address, contact_person, dental_tender, public_profile_consent, data_confirmed from clinics where id=$1", [c.id])).toEqual({
+      region: "Область 1", address: "вул. А, 1", contact_person: "Петро", dental_tender: true, public_profile_consent: true, data_confirmed: true,
+    });
+    const d = await addClinic(db, "Без прапорців", "c1");
+    expect(await one(db, "select dental_tender, public_profile_consent, data_confirmed from clinics where id=$1", [d])).toEqual({
+      dental_tender: false, public_profile_consent: false, data_confirmed: false,
+    });
+  });
+});

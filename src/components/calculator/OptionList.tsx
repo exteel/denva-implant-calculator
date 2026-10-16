@@ -1,10 +1,13 @@
 "use client";
 
-import type { Option } from "@/engine/v2";
+export interface Option<T extends string = string> {
+  id: T;
+  label: string;
+}
 
 interface Props {
   options: Option[];
-  selected?: string;
+  selected?: string | null;
   onSelect: (id: string) => void;
   label: string;
 }

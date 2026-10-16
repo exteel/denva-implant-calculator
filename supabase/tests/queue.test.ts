@@ -69,7 +69,7 @@ describe("Події перерахунку ставлять у чергу ли�
     await db.exec("insert into city_manual_prices (city_id, service_code, tier, value) values ('c1','IMPL','classic',1)");
     expect(await queueKeys(db)).toEqual(["c1/IMPL/classic"]);
     await drain(db);
-    await db.exec("insert into price_modes (city_id, service_code, tier, mode) values ('c2','CROWN','premium','manual')");
+    await db.exec("insert into price_modes (city_id, service_code, tier, mode, override_value, override_reason) values ('c2','CROWN','premium','manual_override', 9000, 'тест')");
     expect(await queueKeys(db)).toEqual(["c2/CROWN/premium"]);
   });
 
@@ -78,10 +78,17 @@ describe("Події перерахунку ставлять у чергу ли�
     expect(await queueKeys(db)).toEqual(["c1/IMPL/classic", "c2/IMPL/classic"]);
   });
 
-  it("зміна порогу / методу / застарілості → усі комбінації активних міст; решта налаштувань — нічого", async () => {
+  it("baseline України → усі активні міста для цієї комбінації; неактивні — ні", async () => {
+    await db.exec("update cities set active = false where id = 'c3'");
+    await drain(db);
+    await db.exec("insert into country_manual_prices (service_code, tier, value) values ('IMPL','classic',8000)");
+    expect(await queueKeys(db)).toEqual(["c1/IMPL/classic", "c2/IMPL/classic"]);
+  });
+
+  it("зміна порогу / «застарілості» → усі комбінації активних міст; решта налаштувань — нічого", async () => {
     await db.exec("update settings set deviation_warning_pct = 40");
     expect(await queueKeys(db)).toEqual([]);
-    await db.exec("update settings set aggregation_method = 'arithmetic_mean'");
+    await db.exec("update settings set stale_after_months = 6");
     // 3 міста × (IMPL×3 + CROWN×3 + HEAL + SCAN) = 3 × 8
     expect(await scalar(db, "select count(*)::int from recalc_queue")).toBe(24);
   });
@@ -116,7 +123,9 @@ describe("Події перерахунку ставлять у чергу ли�
     expect(await drain(db)).toBe(0);
     await db.exec("select recalculate('c1','IMPL','classic')");
     await db.exec("select recalculate('c1','IMPL','classic')");
-    expect(await scalar(db, "select count(*)::int from published_prices")).toBe(0); // 1 клініка, джерел немає
+    // 1 клініка без baseline → hybrid = локальна ціна; повторні перерахунки історії не множать
+    expect(await scalar(db, "select count(*)::int from published_prices")).toBe(1);
+    expect(await scalar(db, "select count(*)::int from published_price_history")).toBe(1);
   });
 
   it("process_recalc_queue(max) обмежує партію", async () => {

@@ -281,18 +281,23 @@ export function Modal({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // keep the latest onClose without re-running the focus effect on every parent render
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     ref.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") closeRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
       previous?.focus?.();
     };
-  }, [onClose]);
+  }, []);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/50 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -321,6 +326,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = "Підтвердити",
   askReason = false,
+  reasonRequired = false,
   danger = false,
   busy = false,
   error,
@@ -331,6 +337,8 @@ export function ConfirmDialog({
   message: ReactNode;
   confirmLabel?: string;
   askReason?: boolean;
+  /** Blocks confirming with an empty reason (e.g. manual_override). */
+  reasonRequired?: boolean;
   danger?: boolean;
   busy?: boolean;
   error?: string | null;
@@ -344,7 +352,8 @@ export function ConfirmDialog({
         <div>{message}</div>
         {askReason ? (
           <TextAreaField
-            label="Причина зміни (необов'язково)"
+            label={reasonRequired ? "Причина зміни" : "Причина зміни (необов'язково)"}
+            required={reasonRequired}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             hint="Потрапить у журнал змін."
@@ -353,7 +362,7 @@ export function ConfirmDialog({
         {error ? <Notice tone="bad" role="alert">{error}</Notice> : null}
         <div className="flex justify-end gap-2 pt-1">
           <MiniButton onClick={onCancel} disabled={busy}>Скасувати</MiniButton>
-          <MiniButton tone={danger ? "bad" : "brand"} onClick={() => onConfirm(reason)} disabled={busy}>
+          <MiniButton tone={danger ? "bad" : "brand"} onClick={() => onConfirm(reason)} disabled={busy || (reasonRequired && !reason.trim())}>
             {busy ? "Зачекайте…" : confirmLabel}
           </MiniButton>
         </div>

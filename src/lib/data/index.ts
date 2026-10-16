@@ -3,6 +3,14 @@ import { DataUnavailableError, type CalculatorDataSource } from "./types";
 export { DataUnavailableError };
 export type { CalculatorDataSource };
 
+/**
+ * True in a fixture build (local development / e2e). A build-time constant:
+ * in normal builds it is `false` and the fixture module is never bundled.
+ */
+export function isFixtureMode(): boolean {
+  return process.env.NEXT_PUBLIC_DATA_SOURCE === "fixture";
+}
+
 let cached: Promise<CalculatorDataSource> | null = null;
 
 async function load(): Promise<CalculatorDataSource> {

@@ -6,12 +6,14 @@ import { useMemo, useState } from "react";
 import type { AdminPriceMatrixRow, SourceType, Tier } from "@/lib/contracts";
 import { getAggregateDetail, getPriceMatrix, listCities, processQueueNow, recalculateCity, recalculateNow } from "../api";
 import {
-  METHOD_LABEL,
   MODE_LABEL,
+  SCOPE_LABEL,
+  SOURCE_HELP,
   SOURCE_LABEL,
   TIER_LABEL,
   cellKey,
   describeError,
+  formatBlend,
   formatDateTime,
   formatMoney,
   formatPlain,
@@ -22,9 +24,11 @@ import { Badge, DataState, MiniButton, Modal, Notice, PageHeader, SelectField, T
 const TIER_COLUMNS: Tier[] = ["common", "minimum", "classic", "premium"];
 const sourceTone: Record<SourceType, "good" | "brand" | "warn" | "neutral"> = {
   aggregate: "good",
-  manual: "brand",
+  hybrid: "brand",
+  manual_baseline: "neutral",
   manual_override: "warn",
   regional_fallback: "neutral",
+  national_fallback: "neutral",
 };
 
 export default function AggregatesPage() {
@@ -41,7 +45,7 @@ function AggregatesView({ initialCity }: { initialCity: string }) {
   const [progress, setProgress] = useState<string | null>(null);
   const act = useAction();
 
-  const currency = cities.data?.find((c) => c.id === cityId)?.currency ?? "UAH";
+  const currency = "UAH"; // v3: all published prices are UAH
 
   const { services, byKey } = useMemo(() => {
     const map = new Map<string, AdminPriceMatrixRow>();
@@ -75,7 +79,7 @@ function AggregatesView({ initialCity }: { initialCity: string }) {
     <>
       <PageHeader
         title="Агрегати міста"
-        description="Для кожної послуги й рівня: режим, ручне значення, регіональний fallback, автоматичний агрегат і фактично опубліковане значення. Натисніть комірку, щоб побачити вибірку."
+        description="Для кожної послуги й рівня: локальна вибірка клінік, медіана, використаний базовий орієнтир (місто → область → Україна), ваги гібриду та фактично опубліковане значення. Натисніть комірку, щоб побачити вибірку й формулу."
         actions={
           <>
             <MiniButton onClick={() => void drainQueue()} disabled={act.busy}>Обробити чергу</MiniButton>
@@ -102,7 +106,7 @@ function AggregatesView({ initialCity }: { initialCity: string }) {
       ) : (
         <DataState loading={matrix.loading} error={matrix.error} onRetry={matrix.reload} empty={services.length === 0} emptyText="Для цього міста немає активних послуг.">
           <TableWrap>
-            <table className="w-full min-w-[900px] border-collapse">
+            <table className="w-full min-w-[1000px] border-collapse">
               <thead>
                 <tr>
                   <th className={thClass}>Послуга</th>
@@ -139,9 +143,16 @@ function AggregatesView({ initialCity }: { initialCity: string }) {
                             ) : (
                               <Badge tone="bad">Немає даних</Badge>
                             )}
-                            <div className="mt-1 text-[11px] text-muted">
-                              {row.mode !== "auto" ? <>режим: {MODE_LABEL[row.mode]} · </> : null}
-                              агрегат: {row.aggregate_value !== null ? `${formatPlain(row.aggregate_value)} (${row.aggregate_clinic_count ?? 0}/${row.min_clinics})` : "—"}
+                            <div className="mt-1 space-y-0.5 text-[11px] text-muted">
+                              {row.mode === "manual_override" ? <div className="font-bold text-warn">override: {formatPlain(row.override_value)}</div> : null}
+                              <div>
+                                клінік: {row.local_clinic_count}
+                                {row.local_median !== null ? ` · медіана ${formatPlain(row.local_median)}` : ""}
+                              </div>
+                              <div>
+                                базова: {row.baseline_value !== null ? `${formatPlain(row.baseline_value)} (${row.baseline_scope ? SCOPE_LABEL[row.baseline_scope] : "—"})` : "—"}
+                              </div>
+                              {row.blend_weights ? <div>{formatBlend(row.blend_weights)}</div> : null}
                             </div>
                           </button>
                         </td>
@@ -156,12 +167,7 @@ function AggregatesView({ initialCity }: { initialCity: string }) {
       )}
 
       {open ? (
-        <DetailDialog
-          row={open}
-          currency={currency}
-          onClose={() => setOpen(null)}
-          onRecalculated={() => matrix.reload()}
-        />
+        <DetailDialog row={open} currency={currency} onClose={() => setOpen(null)} onRecalculated={() => matrix.reload()} />
       ) : null}
     </>
   );
@@ -185,45 +191,65 @@ function DetailDialog({
   async function recalc() {
     const source = await act.run(() => recalculateNow(row.city_id, row.service_code, row.tier), describeError);
     if (source !== undefined) {
-      setDone(`Перераховано. Джерело публікації: ${source || "—"}.`);
+      setDone(`Перераховано. Джерело публікації: ${SOURCE_LABEL[source as SourceType] ?? (source || "—")}.`);
       detail.reload();
       onRecalculated();
     }
   }
 
-  const insufficient = (row.aggregate_clinic_count ?? 0) < row.min_clinics;
   const snap = detail.data?.snapshot;
+  const s = row.published_source_type;
 
   return (
     <Modal title={`${row.service_name} · ${TIER_LABEL[row.tier]}`} onClose={onClose} wide>
       <div className="space-y-4 text-sm">
         <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-          <div><dt className="text-muted">Режим</dt><dd className="font-bold">{MODE_LABEL[row.mode]}</dd></div>
-          <div><dt className="text-muted">Ручний орієнтир міста</dt><dd className="font-bold">{formatMoney(row.manual_value, currency)}</dd></div>
-          <div><dt className="text-muted">Регіональний орієнтир</dt><dd className="font-bold">{formatMoney(row.region_value, currency)}</dd></div>
           <div>
-            <dt className="text-muted">Автоматичний агрегат</dt>
-            <dd className="font-bold">
-              {formatMoney(row.aggregate_value, currency)}
-              {row.aggregate_method ? <span className="font-normal text-muted"> · {METHOD_LABEL[row.aggregate_method]}</span> : null}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted">Клінік у вибірці</dt>
-            <dd className="font-bold">
-              {row.aggregate_clinic_count ?? 0} із мінімальних {row.min_clinics}{" "}
-              {insufficient ? <Badge tone="warn">недостатньо для публікації</Badge> : <Badge tone="good">достатньо</Badge>}
-            </dd>
-          </div>
-          <div><dt className="text-muted">Розраховано</dt><dd className="font-bold">{formatDateTime(row.aggregate_calculated_at)}</dd></div>
-          <div className="sm:col-span-2">
             <dt className="text-muted">Опубліковано</dt>
             <dd className="font-bold">
               {formatMoney(row.published_value, currency)}{" "}
-              {row.published_source_type ? <Badge tone={sourceTone[row.published_source_type]}>{SOURCE_LABEL[row.published_source_type]}</Badge> : <Badge tone="bad">немає даних</Badge>}
+              {s ? <Badge tone={sourceTone[s]}>{SOURCE_LABEL[s]}</Badge> : <Badge tone="bad">немає даних</Badge>}
               <span className="font-normal text-muted"> · {formatDateTime(row.published_at)}</span>
             </dd>
+            {s ? <dd className="mt-0.5 text-xs text-muted">{SOURCE_HELP[s]}</dd> : null}
           </div>
+          <div>
+            <dt className="text-muted">Режим</dt>
+            <dd className="font-bold">
+              {MODE_LABEL[row.mode]}
+              {row.mode === "manual_override" ? <span className="font-normal"> · {formatMoney(row.override_value, currency)}</span> : null}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">Локальна вибірка</dt>
+            <dd className="font-bold">
+              {row.local_clinic_count} {row.local_clinic_count === 1 ? "клініка" : "клінік"}
+              {" · "}медіана {formatMoney(row.local_median, currency)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">Базовий орієнтир (використано)</dt>
+            <dd className="font-bold">
+              {formatMoney(row.baseline_value, currency)}
+              {row.baseline_scope ? <span className="font-normal text-muted"> · {SCOPE_LABEL[row.baseline_scope]}</span> : null}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted">Ваги гібриду</dt>
+            <dd className="font-bold">{formatBlend(row.blend_weights)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted">Орієнтири за рівнями (місто / область / Україна)</dt>
+            <dd className="tabular font-bold">
+              {formatPlain(row.city_baseline)} / {formatPlain(row.region_baseline)} / {formatPlain(row.country_baseline)}
+            </dd>
+          </div>
+          {snap ? (
+            <div className="sm:col-span-2">
+              <dt className="text-muted">Формула (snapshot від {formatDateTime(snap.calculated_at)})</dt>
+              <dd className="rounded-lg bg-canvas px-3 py-2 font-mono text-xs">{snap.formula || "—"}</dd>
+            </div>
+          ) : null}
         </dl>
 
         <DataState loading={detail.loading} error={detail.error} onRetry={detail.reload}>
@@ -248,7 +274,7 @@ function DetailDialog({
                   </table>
                 </TableWrap>
               ) : (
-                <p className="text-muted">Жодна ціна не пройшла відбір.</p>
+                <p className="text-muted">Жодна ціна клініки не пройшла відбір.</p>
               )}
 
               <h3 className="font-extrabold">Виключено ({detail.data?.excluded.length})</h3>

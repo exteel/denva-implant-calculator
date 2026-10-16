@@ -73,7 +73,7 @@ describe("AdminShell auth gate", () => {
     render(<AdminShell><p>secret</p></AdminShell>);
     expect(await screen.findByText("secret")).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Розділи адмін-панелі" })).toBeInTheDocument();
-    for (const label of ["Міста та регіони", "Клініки", "Каталог послуг", "Прайси клінік", "Імпорт Excel", "Міські орієнтири", "Агрегати міста", "Історія змін", "Заявки", "Налаштування"]) {
+    for (const label of ["Дашборд заявок", "Міста та регіони", "Клініки", "Каталог послуг", "Прайси клінік", "Імпорт Excel", "Базові ціни", "Агрегати міста", "Історія змін", "Заявки", "Налаштування"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
   });

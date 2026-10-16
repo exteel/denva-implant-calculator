@@ -8,6 +8,9 @@ import {
   leadsPerDay,
   niceTicks,
   scenarioOf,
+  leadSum,
+  jawSchemesOf,
+  tiersOf,
   summarize,
   type LeadRow,
 } from "./stats";
@@ -21,7 +24,7 @@ function lead(daysAgo: number, payload: Record<string, unknown> = {}, extra: Par
     phone: "+380671234567",
     telegram_status: "sent",
     created_at: d.toISOString(),
-    payload: { intent: "refine", location: { name: "Львів" }, scenario: { scope: "individual" }, ...payload },
+    payload: { intent: "refine", location: { name: "Львів" }, upperJawInput: { tooth_count: 1, implant_tier: "classic", crown_or_arch_tier: "classic" }, upperJawCalculation: { scenario: "single", tooth_count: 1 }, lowerJawInput: null, lowerJawCalculation: null, ...payload },
     ...extra,
   };
 }
@@ -52,9 +55,9 @@ describe("summarize", () => {
   it("counts totals, today, average and Telegram states", () => {
     const s = summarize(
       [
-        lead(0, { total_uah: 100000 }),
-        lead(0, { total_uah: 200000 }, { telegram_status: "failed" }),
-        lead(3, { total_uah: null }, { telegram_status: "pending" }),
+        lead(0, { overallTotal: { low: 100000, high: 100000 } }),
+        lead(0, { overallTotal: { low: 150000, high: 250000 } }, { telegram_status: "failed" }),
+        lead(3, { overallTotal: null }, { telegram_status: "pending" }),
       ],
       NOW,
     );
@@ -102,25 +105,51 @@ describe("breakdowns", () => {
     expect(rows.reduce((s, r) => s + r.count, 0)).toBe(leads.length);
   });
 
-  it("maps scenarios, intents, tiers and sources to Ukrainian labels", () => {
+  it("maps jaws, intents, tiers, schemes and sources to Ukrainian labels", () => {
+    const both = {
+      intent: "dental_tender",
+      upperJawInput: { tooth_count: 3, implant_tier: "classic", crown_or_arch_tier: "minimum" },
+      upperJawCalculation: { scenario: "adjacent", tooth_count: 3 },
+      lowerJawInput: { tooth_count: 10, implant_tier: "classic", crown_or_arch_tier: "minimum" },
+      lowerJawCalculation: { scenario: "aox4", tooth_count: 10 },
+      utm: { utm_source: "google" },
+    };
     const b = breakdowns([
-      lead(0, { scenario: { scope: "one_jaw" }, intent: "send_calculation", implant_tier: "classic", crown_or_arch_tier: "minimum", utm: { utm_source: "google" } }),
-      lead(0, { scenario: { scope: "both_jaws" }, implant_tier: "classic", crown_or_arch_tier: "minimum", utm: {} }),
-      lead(0, { scenario: {} }),
+      lead(0, both),
+      lead(0, { lowerJawInput: { tooth_count: 2, implant_tier: "premium", crown_or_arch_tier: "premium" }, lowerJawCalculation: { scenario: "adjacent", tooth_count: 2 }, upperJawInput: null, upperJawCalculation: null }),
+      lead(0, { utm: {} }),
     ]);
-    expect(b.scenarios.map((r) => r.label).sort()).toEqual(["Не знаю", "Обидві щелепи", "Одна щелепа"].sort());
-    expect(b.intents.find((r) => r.label === "Надіслати розрахунок")?.count).toBe(1);
+    expect(b.scenarios.map((r) => r.label).sort()).toEqual(["Верхня щелепа", "Нижня щелепа", "Обидві щелепи"].sort());
+    expect(b.schemes.find((r) => r.label === "2–6 зубів поруч")?.count).toBe(2);
+    expect(b.schemes.find((r) => r.label === "All-on-4")?.count).toBe(1);
+    expect(b.intents.find((r) => r.label === "Dental Tender")?.count).toBe(1);
     expect(b.intents.find((r) => r.label === "Уточнити розрахунок")?.count).toBe(2);
-    expect(b.tiers[0]).toMatchObject({ label: "Класичний / Мінімальний", count: 2 });
-    expect(b.sources.map((r) => r.label).sort()).toEqual(["google", "без UTM"].sort());
+    expect(b.tiers.map((r) => r.label).sort()).toEqual(["Класичний / Класичний", "Преміальний / Преміальний", "Класичний / Мінімальний"].sort());
     expect(b.sources.find((r) => r.label === "без UTM")?.count).toBe(2);
     expect(b.cities[0]).toMatchObject({ label: "Львів", count: 3, percent: 100 });
   });
 
-  it("falls back for odd scenario shapes", () => {
-    expect(scenarioOf(lead(0, { scenario: { jaws: 2 } }))).toBe("Обидві щелепи");
-    expect(scenarioOf(lead(0, { scenario: { kind: "unknown" } }))).toBe("Не знаю");
-    expect(scenarioOf({ ...lead(0), payload: null })).toBe("Не знаю");
+  it("marks differing jaw tiers", () => {
+    const l = lead(0, {
+      upperJawInput: { tooth_count: 1, implant_tier: "classic", crown_or_arch_tier: "classic" },
+      lowerJawInput: { tooth_count: 1, implant_tier: "premium", crown_or_arch_tier: "classic" },
+    });
+    expect(tiersOf(l)).toBe("Різні для щелеп");
+  });
+
+  it("reads the lead sum from overallTotal, falling back to v2 total_uah", () => {
+    expect(leadSum(lead(0, { overallTotal: { low: 100, high: 300 } }))).toEqual({ low: 100, high: 300, mid: 200 });
+    expect(leadSum(lead(0, { overallTotal: { low: 100, high: 100 } }))?.mid).toBe(100);
+    expect(leadSum(lead(0, { total_uah: 5000 }))).toEqual({ low: 5000, high: 5000, mid: 5000 });
+    expect(leadSum(lead(0, {}))).toBeNull();
+  });
+
+  it("still reads v2 flat payloads", () => {
+    const v2 = lead(0, { upperJawInput: undefined, upperJawCalculation: undefined, scenario: { scope: "one_jaw" }, implant_tier: "classic", crown_or_arch_tier: "minimum" });
+    expect(scenarioOf(v2)).toBe("Одна щелепа");
+    expect(tiersOf(v2)).toBe("Класичний / Мінімальний");
+    expect(jawSchemesOf(v2)).toEqual([]);
+    expect(scenarioOf({ ...lead(0), payload: null })).toBe("Не вказано");
   });
 });
 

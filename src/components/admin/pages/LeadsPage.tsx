@@ -3,13 +3,13 @@
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { listLeads, retryLead, type Lead } from "../api";
+import { INTENT_LABEL as V3_INTENT, jawSchemesOf, leadSum, scenarioOf, tiersOf, type LeadRow } from "../dashboard/stats";
 import { describeError, formatDateTime, formatMoney } from "../helpers";
 import { useAsync } from "../hooks";
 import { Badge, DataState, MiniButton, Notice, PageHeader, SelectField, TableWrap, tdClass, thClass } from "../ui";
 
 const STATUS_LABEL = { pending: "Очікує", sent: "Надіслано", failed: "Помилка" } as const;
 const STATUS_TONE = { pending: "warn", sent: "good", failed: "bad" } as const;
-const INTENT_LABEL: Record<string, string> = { refine: "Уточнити розрахунок", send_calculation: "Надіслати розрахунок" };
 
 function payloadField<T>(lead: Lead, key: string): T | undefined {
   return (lead.payload as Record<string, unknown> | null)?.[key] as T | undefined;
@@ -72,25 +72,27 @@ export default function LeadsPage() {
             <tbody>
               {rows.map((l) => {
                 const loc = payloadField<{ name?: string }>(l, "location");
-                const total = payloadField<number | null>(l, "total_uah");
-                const full = payloadField<number | null>(l, "full_treatment_uah");
+                const row = l as unknown as LeadRow;
+                const sum = leadSum(row);
+                const schemes = jawSchemesOf(row);
                 return (
                   <tr key={l.id}>
                     <td className={`${tdClass} whitespace-nowrap`}>{formatDateTime(l.created_at)}</td>
                     <td className={`${tdClass} whitespace-nowrap font-bold`}>
                       <a href={`tel:${l.phone ?? ""}`} className="text-ink no-underline hover:text-brand">{l.phone}</a>
-                      <div className="text-[11px] font-normal text-muted">{INTENT_LABEL[l.intent ?? ""] ?? l.intent}</div>
+                      <div className="text-[11px] font-normal text-muted">{V3_INTENT[l.intent ?? ""] ?? l.intent}</div>
                     </td>
                     <td className={tdClass}>{loc?.name ?? l.location_id ?? "—"}</td>
                     <td className={tdClass}>
                       {payloadField<string>(l, "scenario_label") ?? "—"}
                       <div className="text-[11px] text-muted">
-                        {payloadField<string>(l, "implant_tier") ?? "—"} / {payloadField<string>(l, "crown_or_arch_tier") ?? "—"}
+                        {scenarioOf(row)}
+                        {schemes.length ? ` · ${schemes.join(" + ")}` : ""}
                       </div>
+                      <div className="text-[11px] text-muted">рівні: {tiersOf(row)}</div>
                     </td>
                     <td className={`${tdClass} tabular`}>
-                      {formatMoney(total ?? null)}
-                      {full ? <div className="text-[11px] text-muted">повне: {formatMoney(full)}</div> : null}
+                      {sum ? (sum.low === sum.high ? formatMoney(sum.low) : `${formatMoney(sum.low)} – ${formatMoney(sum.high)}`) : "—"}
                       <div className="text-[11px] text-muted">{payloadField<string>(l, "price_source") ?? ""}</div>
                     </td>
                     <td className={tdClass}>

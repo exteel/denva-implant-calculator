@@ -146,12 +146,9 @@ describe("Метод і валюта", () => {
     expect(await lastSnapshot()).toMatchObject({ value: 16000, method: "median", clinic_count: 4 });
   });
 
-  it("arithmetic_mean за рішенням адміністратора", async () => {
+  it("метод агрегації лише median (arithmetic_mean недоступний)", async () => {
     await seed();
-    await db.exec("update settings set aggregation_method = 'arithmetic_mean'");
-    await drain(db);
-    expect(await lastSnapshot()).toMatchObject({ value: 18000, method: "arithmetic_mean" });
-    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 18000, source_type: "aggregate" });
+    await expect(db.exec("update settings set aggregation_method = 'arithmetic_mean'")).rejects.toThrow();
   });
 
   it("медіана стійка до викидів", async () => {
@@ -180,11 +177,21 @@ describe("Метод і валюта", () => {
     expect((await lastSnapshot()).value).toBe(6000); // курс з майбутнього ігнорується
   });
 
-  it("міста з іншою валютою агрегують у своїй валюті", async () => {
+  it("усе нормалізується в UAH, навіть якщо валюта міста інша (ТЗ §4.7)", async () => {
     await db.exec("update cities set currency = 'EUR' where id = 'c2'");
-    await addPrice(db, await addClinic(db, "A", "c2"), "IMPL", "classic", 5000, { currency: "UAH" }); // 5000 / 50 = 100 EUR
+    await addPrice(db, await addClinic(db, "A", "c2"), "IMPL", "classic", 5000, { currency: "UAH" });
+    await addPrice(db, await addClinic(db, "B", "c2"), "IMPL", "classic", 100, { currency: "EUR" });
     await drain(db);
-    expect(await lastSnapshot("c2")).toMatchObject({ value: 100 });
+    expect(await lastSnapshot("c2")).toMatchObject({ value: 5000, clinic_count: 2 }); // (5000 + 5000) / 2
+  });
+
+  it("значення не округлюється до копійок", async () => {
+    await db.exec("insert into currency_rates (currency, rate_to_uah, rate_date) values ('EUR', 50.1385, '2026-10-12')");
+    await addPrice(db, await addClinic(db, "A", "c1"), "IMPL", "classic", 100.33, { currency: "EUR" });
+    await drain(db);
+    const t = await scalar<string>(db, "select value::text from city_aggregates where city_id='c1' order by seq desc limit 1");
+    expect(Number(t)).toBeCloseTo(100.33 * 50.1385, 9);
+    expect(t.split(".")[1].length).toBeGreaterThan(2);
   });
 });
 
@@ -216,7 +223,7 @@ describe("Snapshot-и незмінні, помилки не ламають пу�
     await db.exec("delete from currency_rates where currency = 'EUR'");
     await addPrice(db, await addClinic(db, "A", "c1"), "IMPL", "classic", 300, { currency: "EUR" });
     expect(await drain(db)).toBe(0);
-    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 10000, source_type: "manual" });
+    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 10000, source_type: "manual_baseline" });
     expect(await scalar(db, "select count(*)::int from city_aggregates where city_id='c1' and service_code='IMPL' and tier='classic'")).toBe(snapsBefore);
     const q = await rows<{ attempts: number; last_error: string }>(db, "select attempts, last_error from recalc_queue where city_id='c1' and service_code='IMPL'");
     expect(q).toHaveLength(1);
@@ -227,7 +234,10 @@ describe("Snapshot-и незмінні, помилки не ламають пу�
     await db.exec("insert into currency_rates (currency, rate_to_uah, rate_date) values ('EUR', 50, '2026-10-12')");
     expect(await drain(db)).toBe(1);
     expect(await scalar(db, "select count(*)::int from recalc_queue")).toBe(0);
-    expect(await lastSnapshot()).toMatchObject({ value: 15000, clinic_count: 1 });
+    // 1 клініка (15000) + baseline міста 10000 → ⅓ · 15000 + ⅔ · 10000
+    const snap = await lastSnapshot();
+    expect(snap.clinic_count).toBe(1);
+    expect(snap.value).toBeCloseTo(11666.6666667, 5);
   });
 
   it("збій однієї комбінації не блокує інші в черзі", async () => {
@@ -256,8 +266,10 @@ describe("Деактивація і виключення зберігають і
     await db.query("update clinics set status = 'excluded' where id = $1", [ids[1]]);
     await drain(db);
 
-    // залишилось 2 клініки → знову ручне значення
-    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 10000, source_type: "manual" });
+    // залишилось 2 клініки (17000, 19500; медіана 18250) → гібрид ⅔ · 18250 + ⅓ · 10000
+    const pubNow = await rows<{ value: number; source_type: string }>(db, "select value::float8 as value, source_type from published_prices where location_id='c1' and service_code='IMPL'");
+    expect(pubNow[0].source_type).toBe("hybrid");
+    expect(pubNow[0].value).toBeCloseTo((2 * 18250 + 10000) / 3, 6);
     expect(await scalar(db, "select count(*)::int from city_aggregates")).toBeGreaterThan(snapsBefore);
     expect(await scalar(db, "select count(*)::int from published_price_history")).toBeGreaterThan(histBefore);
     const s = await lastSnapshot();

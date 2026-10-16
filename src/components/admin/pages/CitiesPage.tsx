@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { listCities, listRegions, saveCity, saveRegion, type Region } from "../api";
-import { CURRENCIES, describeError, parseAliases, parseDecimal, slugify } from "../helpers";
+import { listCities, listRegions, saveCity, saveRegion, type City, type Region } from "../api";
+import { SEO_STATUS_LABEL, CURRENCIES, describeError, parseAliases, parseDecimal, slugify } from "../helpers";
 import { useAsync } from "../hooks";
+import { CityPageDialog } from "../CityPageDialog";
 import {
   Badge,
   Button,
@@ -39,6 +40,7 @@ export default function CitiesPage() {
   const regions = useAsync(listRegions, []);
   const cities = useAsync(listCities, []);
   const [cityForm, setCityForm] = useState<CityForm | null>(null);
+  const [pageCity, setPageCity] = useState<City | null>(null);
   const [regionForm, setRegionForm] = useState<{ region: Region; isNew: boolean } | null>(null);
   const regionName = (id: string | null) => regions.data?.find((r) => r.id === id)?.name ?? "—";
 
@@ -58,14 +60,15 @@ export default function CitiesPage() {
       <h2 className="mb-2 text-[17px] font-extrabold">Міста</h2>
       <DataState loading={cities.loading} error={cities.error} onRetry={cities.reload} empty={cities.data?.length === 0} emptyText="Міст ще немає. Створіть перше.">
         <TableWrap>
-          <table className="w-full min-w-[720px] border-collapse">
+          <table className="w-full min-w-[860px] border-collapse">
             <thead>
               <tr>
                 <th className={thClass}>Місто</th>
                 <th className={thClass}>Регіон (fallback)</th>
                 <th className={thClass}>Валюта</th>
                 <th className={thClass}>Поріг вибірки</th>
-                <th className={thClass}>Аліаси</th>
+                <th className={thClass}>Slug</th>
+                <th className={thClass}>SEO-статус</th>
                 <th className={thClass}>Стан</th>
                 <th className={thClass} />
               </tr>
@@ -77,9 +80,15 @@ export default function CitiesPage() {
                   <td className={tdClass}>{regionName(c.region_id)}</td>
                   <td className={tdClass}>{c.currency}</td>
                   <td className={`${tdClass} tabular`}>{c.min_clinics ?? "глобальний"}</td>
-                  <td className={`${tdClass} text-muted`}>{(c.aliases ?? []).join(", ") || "—"}</td>
+                  <td className={`${tdClass} font-mono text-xs`}>{c.slug ?? c.id}</td>
+                  <td className={tdClass}>
+                    <Badge tone={c.seo_status === "published" ? "good" : c.seo_status === "review" ? "brand" : c.seo_status === "stale" || c.seo_status === "removed" ? "warn" : "neutral"}>
+                      {SEO_STATUS_LABEL[c.seo_status ?? "draft"]}
+                    </Badge>
+                  </td>
                   <td className={tdClass}>{c.active ? <Badge tone="good">Активне</Badge> : <Badge>Вимкнене</Badge>}</td>
                   <td className={`${tdClass} text-right`}>
+                    <MiniButton onClick={() => setPageCity(c)}>Сторінка</MiniButton>{" "}
                     <MiniButton
                       onClick={() =>
                         setCityForm({
@@ -140,6 +149,16 @@ export default function CitiesPage() {
           onClose={() => setCityForm(null)}
           onSaved={() => {
             setCityForm(null);
+            cities.reload();
+          }}
+        />
+      ) : null}
+      {pageCity ? (
+        <CityPageDialog
+          city={pageCity}
+          onClose={() => setPageCity(null)}
+          onSaved={() => {
+            setPageCity(null);
             cities.reload();
           }}
         />

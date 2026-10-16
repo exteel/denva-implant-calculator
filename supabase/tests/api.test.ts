@@ -41,9 +41,9 @@ describe("Публічне читання (anon)", () => {
     expect(cities.map((c) => c.id).sort()).toEqual(["c1", "c2"]);
     expect(regions.map((r) => r.id).sort()).toEqual(["r1", "r2"]);
     expect(cities.find((c) => c.id === "c1")).toEqual({
-      kind: "city", id: "c1", name: "Місто 1", region_id: "r1", region_name: "Область 1", aliases: ["c-one"],
+      kind: "city", id: "c1", slug: "c1", name: "Місто 1", region_id: "r1", region_name: "Область 1", aliases: ["c-one"],
     });
-    expect(regions[0]).toEqual({ kind: "region", id: expect.any(String), name: expect.any(String), region_id: null, region_name: null, aliases: [] });
+    expect(regions[0]).toEqual({ kind: "region", id: expect.any(String), slug: expect.any(String), name: expect.any(String), region_id: null, region_name: null, aliases: [] });
   });
 
   it("get_location_prices (місто): форма LocationPricesResponse, лише опубліковане", async () => {
@@ -55,15 +55,21 @@ describe("Публічне читання (anon)", () => {
     expect(res.eur_rate).toEqual({ rate: 50, date: "2026-10-09" });
     expect(res.services.map((s) => s.service_code)).toEqual(["IMPL", "CROWN", "HEAL", "SCAN"]);
     expect(res.services[0]).toEqual({
-      service_code: "IMPL", name: "Імплант", role: "implant", unit: "за імплант", tiered: true,
-      included_text: "Імплант і анестезія", sort: 10,
+      service_code: "IMPL", name: "Імплант", category: "Імплантація", role: "implant", unit: "за імплант", tiered: true,
+      tier_source: "implant_tier", additional: false, included_text: "Імплант і анестезія", sort: 10,
     });
     const byKey = Object.fromEntries(res.prices.map((p) => [`${p.service_code}/${p.tier}`, p]));
-    expect(byKey["IMPL/classic"]).toMatchObject({ value: 10000, currency: "UAH", source_type: "manual", clinic_count: null, calculated_at: null, is_demo: false });
-    expect(byKey["CROWN/classic"]).toMatchObject({ value: 18500, source_type: "aggregate", clinic_count: 3 });
+    expect(byKey["IMPL/classic"]).toEqual({
+      service_code: "IMPL", tier: "classic", value: 10000, currency: "UAH", source_type: "manual_baseline", source_scope: "city",
+      local_clinic_count: 0, baseline_scope: "city", blend_weights: null, calculated_at: null,
+      published_at: expect.any(String), is_demo: false,
+    });
+    expect(byKey["CROWN/classic"]).toMatchObject({
+      value: 18500, source_type: "aggregate", source_scope: "city", local_clinic_count: 3, baseline_scope: null, blend_weights: null,
+    });
     expect(typeof byKey["CROWN/classic"].calculated_at).toBe("string");
     expect(typeof byKey["CROWN/classic"].published_at).toBe("string");
-    expect(byKey["HEAL/common"]).toMatchObject({ value: 1800, source_type: "regional_fallback" });
+    expect(byKey["HEAL/common"]).toMatchObject({ value: 1800, source_type: "regional_fallback", source_scope: "region", baseline_scope: "region" });
     expect(res.prices).toHaveLength(3);
   });
 
@@ -73,14 +79,15 @@ describe("Публічне читання (anon)", () => {
     const text = JSON.stringify(res);
     expect(text).not.toContain("Секретна");
     expect(text).not.toContain("secret-net");
-    expect(text).not.toMatch(/clinic_id|clinic_name|network|price_from|included_ids|excluded/);
+    expect(text).not.toMatch(/clinic_id|clinic_name|network|price_from|included_ids|excluded|override_reason/);
   });
 
   it("get_location_prices (область) повертає лише рядки цієї області", async () => {
     const res = await anon(async () =>
       (await one<{ r: LocationPricesResponse }>(db, "select get_location_prices('region','r1') as r")).r);
     expect(res.location.kind).toBe("region");
-    expect(res.prices.map((p) => `${p.service_code}/${p.tier}/${p.source_type}`)).toEqual(["HEAL/common/regional_fallback"]);
+    expect(res.location).toMatchObject({ slug: "r1", region_id: null });
+    expect(res.prices.map((p) => `${p.service_code}/${p.tier}/${p.source_type}/${p.source_scope}`)).toEqual(["HEAL/common/regional_fallback/region"]);
   });
 
   it("невідома або неактивна локація → помилка; ціни неактивних послуг не повертаються", async () => {
@@ -107,6 +114,7 @@ describe("RLS і права", () => {
       "regions", "cities", "services", "clinics", "clinic_prices", "city_manual_prices", "region_manual_prices",
       "price_modes", "settings", "currency_rates", "city_aggregates", "published_prices", "published_price_history",
       "recalc_queue", "audit_log", "leads", "admin_users", "import_batches", "admin_price_matrix", "admin_clinic_prices",
+      "country_manual_prices",
     ];
     for (const t of tables) {
       await expect(anon(() => db.query(`select * from ${t}`)), t).rejects.toThrow(/permission denied/);
@@ -117,7 +125,8 @@ describe("RLS і права", () => {
     for (const fn of [
       "recalculate('c1','IMPL','classic')", "compute_aggregate('c1','IMPL','classic')", "process_recalc_queue()",
       "submit_lead_record('{}'::jsonb)", "admin_aggregate_detail('c1','IMPL','classic')", "mark_stale_prices()",
-      "publish_price('c1','IMPL','classic')",
+      "publish_price('c1','IMPL','classic')", "recalculate_city('c1')", "import_clinic_prices('{}'::jsonb)",
+      "admin_set_country_manual_price('UA','IMPL','classic',1)",
     ]) {
       await expect(anon(() => db.query(`select ${fn}`)), fn).rejects.toThrow(/permission denied/);
     }
@@ -171,28 +180,40 @@ describe("admin_price_matrix", () => {
     expect([...tiers]).toEqual(["common"]);
   });
 
-  it("містить ручне, регіональне, агрегатне і опубліковане значення", async () => {
+  it("містить baselines міста/області/України, локальну вибірку, ваги й опубліковане значення", async () => {
     await db.exec(`
-      insert into city_manual_prices (city_id, service_code, tier, value) values ('c1','IMPL','classic',10000);
-      insert into region_manual_prices (region_id, service_code, tier, value) values ('r1','IMPL','classic',9000);
-      insert into price_modes (city_id, service_code, tier, mode) values ('c1','IMPL','classic','manual');`);
-    for (const p of [17000, 18500, 19500]) await addPrice(db, await addClinic(db, `K${p}`, "c1"), "IMPL", "classic", p);
+      insert into city_manual_prices (city_id, service_code, tier, value) values ('c1','IMPL','classic',18000);
+      insert into region_manual_prices (region_id, service_code, tier, value) values ('r1','IMPL','classic',17000);
+      insert into country_manual_prices (service_code, tier, value) values ('IMPL','classic',16000);`);
+    for (const p of [17500, 19000]) await addPrice(db, await addClinic(db, `K${p}`, "c1"), "IMPL", "classic", p);
     await drain(db);
     // to_jsonb: як PostgREST, numeric → JSON-число
     const row = (await admin(() => rows<{ r: AdminPriceMatrixRow }>(db,
       "select to_jsonb(m) as r from admin_price_matrix m where city_id='c1' and service_code='IMPL' and tier='classic'")))[0].r;
     expect(row).toMatchObject({
-      city_name: "Місто 1", service_name: "Імплант", mode: "manual", manual_value: 10000, region_value: 9000,
-      aggregate_value: 18500, aggregate_clinic_count: 3, aggregate_method: "median",
-      published_value: 10000, published_source_type: "manual", min_clinics: 3,
+      city_name: "Місто 1", service_name: "Імплант", mode: "auto", override_value: null,
+      city_baseline: 18000, region_baseline: 17000, country_baseline: 16000,
+      local_clinic_count: 2, local_median: 18250, baseline_value: 18000, baseline_scope: "city",
+      published_source_type: "hybrid",
     });
-    expect(row.aggregate_calculated_at).not.toBeNull();
+    expect(row.published_value).toBeCloseTo((2 * 18250 + 18000) / 3, 6);
+    expect(row.blend_weights!.local).toBeCloseTo(2 / 3, 12);
     expect(row.published_at).not.toBeNull();
     expect(Object.keys(row).sort()).toEqual([
-      "aggregate_calculated_at", "aggregate_clinic_count", "aggregate_method", "aggregate_value", "city_id", "city_name",
-      "manual_value", "min_clinics", "mode", "published_at", "published_source_type", "published_value", "region_value",
-      "service_code", "service_name", "tier",
+      "baseline_scope", "baseline_value", "blend_weights", "city_baseline", "city_id", "city_name", "country_baseline",
+      "local_clinic_count", "local_median", "mode", "override_value", "published_at", "published_source_type",
+      "published_value", "region_baseline", "service_code", "service_name", "tier",
     ]);
+  });
+
+  it("режим override і порожній рядок без snapshot-а", async () => {
+    await admin(() => db.exec("select admin_set_price_mode('c1','IMPL','classic','manual_override', 21000, 'аномалія')"));
+    await drain(db);
+    const rowsAll = await admin(() => rows<{ r: AdminPriceMatrixRow }>(db,
+      "select to_jsonb(m) as r from admin_price_matrix m where city_id='c1' and service_code in ('IMPL','HEAL') and tier in ('classic','common')"));
+    const byCode = Object.fromEntries(rowsAll.map((x) => [x.r.service_code, x.r]));
+    expect(byCode.IMPL).toMatchObject({ mode: "manual_override", override_value: 21000, published_value: 21000, published_source_type: "manual_override" });
+    expect(byCode.HEAL).toMatchObject({ mode: "auto", local_clinic_count: 0, local_median: null, published_value: null, blend_weights: null });
   });
 });
 
@@ -204,7 +225,11 @@ describe("admin_aggregate_detail", () => {
     await addPrice(db, b, "IMPL", "classic", 20000);
     await drain(db);
     const d = await admin(async () => (await one<{ d: AggregateDetail }>(db, "select admin_aggregate_detail('c1','IMPL','classic') as d")).d);
-    expect(d.snapshot).toMatchObject({ value: 10000, clinic_count: 1, method: "median" });
+    expect(d.snapshot).toMatchObject({
+      value: 10000, local_clinic_count: 1, local_median: 10000, baseline_value: null, baseline_scope: null,
+      blend_weights: { local: 1, baseline: 0 },
+    });
+    expect(d.snapshot!.formula).toMatch(/базового орієнтира немає/);
     expect(d.included).toHaveLength(1);
     expect(d.included[0]).toMatchObject({ clinic_name: "Альфа", value_uah: 10000 });
     expect(d.excluded).toHaveLength(1);
@@ -241,91 +266,122 @@ describe("Контроль якості: admin_clinic_prices", () => {
   });
 });
 
-describe("import_clinic_prices (ТЗ §7.4, §8)", () => {
+describe("import_clinic_prices (ТЗ §7.4, §8; шаблон v3)", () => {
   const row = (n: number, over: Record<string, unknown> = {}) => ({
-    row_number: n, offer_name: `Позиція ${n}`, brand_material: null, price_from: 18000, price_to: null, currency: "UAH",
-    included_text: null, exclusions: null, source: null, service_code: "IMPL", tier: "classic", ...over,
+    row_number: n, service_code: "IMPL", category: "Імплантація", service_name: `Позиція ${n}`, unit: "за імплант", tier: "classic",
+    price_from: 18000, price_to: null, currency: "UAH", included_text: null, exclusions: null, valid_from: null, note: null, ...over,
   });
   const payload = (rowsArr: unknown[], clinic: Partial<ImportPayload["clinic"]> = {}): ImportPayload => ({
     file_name: "clinic.xlsx",
-    clinic: { clinic_id: null, name: "Імпортна клініка", city_id: "c1", contacts: "+380", valid_from: "2026-10-01", currency: "UAH", ...clinic },
+    clinic: {
+      clinic_id: null, name: "Імпортна клініка", city_id: "c1", region: "Область 1", address: "вул. Тестова, 1",
+      contact_person: "Іван", contacts: "+380", valid_from: "2026-10-01", dental_tender: true,
+      public_profile_consent: false, data_confirmed: true, ...clinic,
+    },
     rows: rowsArr as ImportPayload["rows"],
   });
   const run = (p: ImportPayload) => admin(async () => (await one<{ r: ImportReport }>(db, "select import_clinic_prices($1::jsonb) as r", [JSON.stringify(p)])).r);
 
-  it("створює чернетку клініки й повертає протокол: прийняті, помилки, дублікати, невідомі коди", async () => {
-    await db.exec("update services set active = true");
+  it("створює чернетку клініки й повертає протокол: прийняті, помилки, дублікати, невідомі коди, порожні", async () => {
     const report = await run(payload([
-      row(1),
-      row(2, { service_code: "IMPL", tier: "premium", price_from: 28000, price_to: 32000 }),
-      row(3, { price_from: 0 }),
-      row(4, { price_from: 5000, price_to: 4000 }),
-      row(5, { currency: "RUB" }),
-      row(6, { service_code: "NOPE" }),
-      row(7),                                   // дублікат рядка 1 у файлі
-      row(8, { service_code: null, tier: null }), // ще не зіставлено — на модерацію
-      row(9, { service_code: "HEAL", tier: "common", price_from: 1800, currency: "EUR" }),
-      row(10, { tier: "bogus" }),
-      row(11, { service_code: "HEAL", tier: "classic" }),
-      row(12, { price_from: "abc" }),
+      row(16),
+      row(17, { tier: "premium", price_from: 28000, price_to: 32000 }),
+      row(18, { price_from: 0 }),
+      row(19, { price_from: 5000, price_to: 4000 }),
+      row(20, { currency: "RUB" }),
+      row(21, { service_code: "NOPE" }),
+      row(22),                                          // дублікат рядка 16 у файлі
+      row(23, { service_code: null, tier: null }),      // ще не зіставлено — на модерацію
+      row(24, { service_code: "HEAL", tier: "common", price_from: 1800, currency: "EUR" }),
+      row(25, { tier: "bogus" }),
+      row(26, { service_code: "HEAL", tier: "classic" }),
+      row(27, { price_from: "abc" }),
+      row(28, { price_from: null }),                    // порожній рядок шаблону
+      row(29, { price_from: null, price_to: 5000 }),    // без «Ціна від» — теж порожній
+      row(30, { price_from: "" }),
+      row(31, { valid_from: "2026-13-45" }),
     ]));
-    expect(report.accepted).toEqual([1, 2, 8, 9]);
-    expect(report.pending_moderation).toEqual([1, 2, 8, 9]);
-    expect(report.duplicates).toEqual([7]);
-    expect(report.unknown_service_code).toEqual([6]);
-    expect(report.errors.map((e) => e.row_number)).toEqual([3, 4, 5, 10, 11, 12]);
-    expect(report.errors.find((e) => e.row_number === 3)?.message).toMatch(/більше нуля/);
-    expect(report.errors.find((e) => e.row_number === 5)?.message).toMatch(/валюта/);
+    expect(report.accepted).toEqual([16, 17, 23, 24]);
+    expect(report.pending_moderation).toEqual([16, 17, 23, 24]);
+    expect(report.duplicates).toEqual([22]);
+    expect(report.unknown_service_code).toEqual([21]);
+    expect(report.skipped_empty).toEqual([28, 29, 30]);
+    expect(report.errors.map((e) => e.row_number)).toEqual([18, 19, 20, 25, 26, 27, 31]);
+    expect(report.errors.find((e) => e.row_number === 18)?.message).toMatch(/більше нуля/);
+    expect(report.errors.find((e) => e.row_number === 20)?.message).toMatch(/валюта/);
 
-    const clinic = await one<{ name: string; status: string; city_id: string }>(db, "select name, status, city_id from clinics where id = $1", [report.clinic_id]);
-    expect(clinic).toEqual({ name: "Імпортна клініка", status: "draft", city_id: "c1" });
+    const clinic = await one<Record<string, unknown>>(db,
+      `select name, status, city_id, region, address, contact_person, contacts, dental_tender, public_profile_consent, data_confirmed
+         from clinics where id = $1`, [report.clinic_id]);
+    expect(clinic).toEqual({
+      name: "Імпортна клініка", status: "draft", city_id: "c1", region: "Область 1", address: "вул. Тестова, 1",
+      contact_person: "Іван", contacts: "+380", dental_tender: true, public_profile_consent: false, data_confirmed: true,
+    });
     const prices = await rows<{ status: string; import_batch_id: string; verified_at: string | null }>(
       db, "select status, import_batch_id, verified_at from clinic_prices where clinic_id = $1", [report.clinic_id]);
     expect(prices).toHaveLength(4);
     expect(new Set(prices.map((p) => p.status))).toEqual(new Set(["pending"]));
     expect(new Set(prices.map((p) => p.import_batch_id))).toEqual(new Set([report.batch_id]));
-    expect(await scalar(db, "select report ->> 'clinic_id' from import_batches where id = $1", [report.batch_id])).toBe(report.clinic_id);
-    expect(await scalar(db, "select value::float8 from clinic_prices where offer_name = 'Позиція 2'")).toBe(30000);
+    expect(await scalar(db, "select report -> 'skipped_empty' from import_batches where id = $1", [report.batch_id])).toEqual([28, 29, 30]);
+    expect(await scalar(db, "select value::float8 from clinic_prices where offer_name = 'Позиція 17'")).toBe(30000);
+    expect(await scalar(db, "select count(*)::int from clinic_prices where offer_name in ('Позиція 28', 'Позиція 29')")).toBe(0);
   });
 
-  it("повторний імпорт того самого файлу → усе дублікати (існуючі pending/approved)", async () => {
-    const first = await run(payload([row(1), row(2, { tier: "minimum" })]));
-    expect(first.accepted).toEqual([1, 2]);
-    const second = await run(payload([row(1), row(2, { tier: "minimum" })], { clinic_id: first.clinic_id }));
+  it("дата чинності й примітка з рядка переносяться; валюта береться з рядка", async () => {
+    const report = await run(payload([row(16, { valid_from: "2026-09-15", note: "https://clinic.example/price", currency: "USD", price_from: 450 })]));
+    const p = await one<{ valid_from: string; source_url: string; currency: string }>(db,
+      "select valid_from::text as valid_from, source_url, currency from clinic_prices where clinic_id = $1", [report.clinic_id]);
+    expect(p).toEqual({ valid_from: "2026-09-15", source_url: "https://clinic.example/price", currency: "USD" });
+  });
+
+  it("повторний імпорт того самого файлу → усе дублікати (існуючі pending/approved), клініка та сама", async () => {
+    const first = await run(payload([row(16), row(17, { tier: "minimum" })]));
+    expect(first.accepted).toEqual([16, 17]);
+    const second = await run(payload([row(16), row(17, { tier: "minimum" })]));   // без clinic_id: пошук за містом і назвою
     expect(second.accepted).toEqual([]);
-    expect(second.duplicates).toEqual([1, 2]);
+    expect(second.duplicates).toEqual([16, 17]);
     expect(second.clinic_id).toBe(first.clinic_id);
+    expect(await scalar(db, "select count(*)::int from clinics")).toBe(1);
+  });
+
+  it("повторний імпорт не знімає згоду/прапорці, а лише вмикає їх", async () => {
+    const first = await run(payload([row(16)], { public_profile_consent: true }));
+    await run(payload([row(17, { tier: "minimum" })], { public_profile_consent: false, dental_tender: false }));
+    expect(await one(db, "select dental_tender, public_profile_consent from clinics where id = $1", [first.clinic_id])).toEqual({ dental_tender: true, public_profile_consent: true });
   });
 
   it("відхилена ціна не вважається дублікатом", async () => {
-    const first = await run(payload([row(1)]));
+    const first = await run(payload([row(16)]));
     await db.exec("update clinic_prices set status = 'rejected'");
-    const second = await run(payload([row(1)], { clinic_id: first.clinic_id }));
-    expect(second.accepted).toEqual([1]);
+    const second = await run(payload([row(16)], { clinic_id: first.clinic_id }));
+    expect(second.accepted).toEqual([16]);
   });
 
   it("імпортовані рядки не впливають на агрегати й опубліковані ціни до підтвердження", async () => {
     await db.exec("insert into city_manual_prices (city_id, service_code, tier, value) values ('c1','IMPL','classic',10000)");
-    await db.exec("update settings set min_clinics = 1");
-    const report = await run(payload([row(1, { price_from: 99999 })]));
+    const report = await run(payload([row(16, { price_from: 99999 })]));
     // навіть якщо клініку активувати, ціна лишається pending
     await db.query("update clinics set status = 'active' where id = $1", [report.clinic_id]);
     await drain(db);
-    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 10000, source_type: "manual" });
+    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 10000, source_type: "manual_baseline", local_clinic_count: 0 });
     const snap = await one<{ clinic_count: number; excluded: { reason: string }[] }>(db,
       "select clinic_count, excluded from city_aggregates where city_id='c1' and service_code='IMPL' and tier='classic' order by seq desc limit 1");
     expect(snap.clinic_count).toBe(0);
     expect(snap.excluded.map((e) => e.reason)).toEqual(["ціна не підтверджена"]);
 
-    // після підтвердження модератором — публікується
+    // після підтвердження модератором — 1 клініка → гібрид ⅓ · 99999 + ⅔ · 10000
     await admin(() => db.query("select admin_set_clinic_price_status(array(select id from clinic_prices), 'approved', 'перевірено')"));
     await drain(db);
-    expect(await published(db, "city", "c1", "IMPL", "classic")).toMatchObject({ value: 99999, source_type: "aggregate", clinic_count: 1 });
+    const p = await one<{ value: number; source_type: string; local_clinic_count: number }>(db,
+      "select value::float8 as value, source_type, local_clinic_count from published_prices where location_id='c1' and service_code='IMPL'");
+    expect(p.source_type).toBe("hybrid");
+    expect(p.local_clinic_count).toBe(1);
+    expect(p.value).toBeCloseTo((99999 + 2 * 10000) / 3, 6);
   });
 
   it("помилки рівня файлу: невідоме місто / клініка", async () => {
-    await expect(run(payload([row(1)], { city_id: "nope" }))).rejects.toThrow(/Місто nope не знайдено/);
-    await expect(run(payload([row(1)], { clinic_id: "00000000-0000-4000-8000-000000000999" }))).rejects.toThrow(/Клініку/);
+    await expect(run(payload([row(16)], { city_id: "nope" }))).rejects.toThrow(/Місто nope не знайдено/);
+    await expect(run(payload([row(16)], { clinic_id: "00000000-0000-4000-8000-000000000999" }))).rejects.toThrow(/Клініку/);
   });
 });
 

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope } from "next/font/google";
+import { SITE_URL } from "@/lib/seo/site";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -8,13 +9,15 @@ const manrope = Manrope({
   display: "swap",
 });
 
+// No global `robots`/`alternates`: indexing is decided per page (ТЗ §11.3) — a
+// layout-level directive would be inherited and could conflict with it.
 export const metadata: Metadata = {
-  title: "Калькулятор імплантації — DENVA AI",
+  metadataBase: new URL(`${SITE_URL}/`),
+  title: { default: "Калькулятор імплантації — DENVA", template: "%s | DENVA" },
   description:
     "Дізнайтеся орієнтовну вартість імплантації у вашому місті: мінімальний, класичний і преміальний рівні, додаткові витрати окремо. Без реєстрації та телефону.",
   openGraph: {
-    title: "Калькулятор імплантації — DENVA AI",
-    description: "Орієнтовна ринкова вартість імплантації у вашому місті — без реєстрації та телефону.",
+    siteName: "DENVA",
     locale: "uk_UA",
     type: "website",
   },

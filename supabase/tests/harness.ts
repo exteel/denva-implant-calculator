@@ -41,17 +41,43 @@ export function migrationFiles(): string[] {
     .sort();
 }
 
-/** Нова БД: заглушки Supabase + усі міграції (+ seed, якщо потрібно). */
-export async function createDb(opts: { seed?: boolean } = {}): Promise<PGlite> {
-  const db = new PGlite();
-  await db.exec(SUPABASE_STUBS);
-  for (const file of migrationFiles()) {
+export async function applyMigrations(db: PGlite, filter: (file: string) => boolean = () => true) {
+  for (const file of migrationFiles().filter(filter)) {
     try {
       await db.exec(readFileSync(path.join(MIGRATIONS_DIR, file), "utf8"));
     } catch (e) {
       throw new Error(`Міграція ${file} не застосувалась: ${(e as Error).message}`);
     }
   }
+}
+
+/** Міграції v2 (до 20261017…) — для перевірки переходу «жива БД v2 → v3». */
+export const isV2Migration = (file: string) => file < "20261017";
+
+/**
+ * БД «як живий проєкт до v3»: заглушки Supabase + міграції 01–07 + демо-seed v2 + адмін + одна заявка.
+ * Далі тест сам застосовує міграції v3: `applyMigrations(db, (f) => !isV2Migration(f))`.
+ */
+export async function createV2Db(): Promise<PGlite> {
+  const db = new PGlite();
+  await db.exec(SUPABASE_STUBS);
+  await applyMigrations(db, isV2Migration);
+  await db.exec(
+    `insert into auth.users (id, email) values ('${ADMIN_ID}', 'admin@example.com');
+     insert into public.admin_users (user_id, email) values ('${ADMIN_ID}', 'admin@example.com');`,
+  );
+  await db.exec(readFileSync(path.join(__dirname, "fixtures", "seed-v2.sql"), "utf8"));
+  await db.exec(
+    `select public.submit_lead_record('{"intent":"refine","phone":"+380671234567","location":{"kind":"city","id":"kyiv","name":"Київ"}}'::jsonb)`,
+  );
+  return db;
+}
+
+/** Нова БД: заглушки Supabase + усі міграції (+ seed, якщо потрібно). */
+export async function createDb(opts: { seed?: boolean } = {}): Promise<PGlite> {
+  const db = new PGlite();
+  await db.exec(SUPABASE_STUBS);
+  await applyMigrations(db);
   await db.exec(
     `insert into auth.users (id, email) values ('${ADMIN_ID}', 'admin@example.com'), ('${USER_ID}', 'user@example.com');
      insert into public.admin_users (user_id, email) values ('${ADMIN_ID}', 'admin@example.com');`,
@@ -111,16 +137,18 @@ export async function scalar<T = unknown>(db: PGlite, sql: string, params?: unkn
 
 /** Дві області, три міста, чотири послуги; без клінік і цін. */
 export const FIXTURE_SQL = `
+  -- ізолюємо тестові послуги від каталогу v3, який створює міграція
+  update services set active = false;
   insert into regions (id, name) values ('r1', 'Область 1'), ('r2', 'Область 2');
   insert into cities (id, name, region_id, aliases) values
     ('c1', 'Місто 1', 'r1', '{c-one}'),
     ('c2', 'Місто 2', 'r1', '{}'),
     ('c3', 'Місто 3', 'r2', '{}');
-  insert into services (service_code, name, role, unit, tiered, sort) values
-    ('IMPL', 'Імплант', 'implant', 'за імплант', true, 10),
-    ('CROWN', 'Коронка', 'crown', 'за коронку', true, 20),
-    ('HEAL', 'Формувач', 'healing', 'за імплант', false, 30),
-    ('SCAN', 'Сканування', 'scan', 'за етап', false, 40);
+  insert into services (service_code, name, category, role, unit, tiered, tier_source, additional, sort) values
+    ('IMPL', 'Імплант', 'Імплантація', 'implant', 'за імплант', true, 'implant_tier', false, 10),
+    ('CROWN', 'Коронка', 'Коронки', 'crown', 'за коронку', true, 'crown_or_arch_tier', false, 20),
+    ('HEAL', 'Формувач', 'Компоненти', 'healing', 'за імплант', false, 'common', false, 30),
+    ('SCAN', 'Сканування', 'Цифровий етап', 'scan', 'за етап', false, 'common', false, 40);
   insert into currency_rates (currency, rate_to_uah, rate_date) values ('EUR', 50, '2026-10-09'), ('USD', 40, '2026-10-09');
 `;
 
@@ -203,9 +231,9 @@ export async function drain(db: PGlite): Promise<number> {
 }
 
 export async function published(db: PGlite, kind: string, id: string, service: string, tier: string) {
-  const r = await rows<{ value: string; source_type: string; clinic_count: number | null; currency: string }>(
+  const r = await rows<{ value: number; source_type: string; local_clinic_count: number; currency: string }>(
     db,
-    `select value::float8 as value, source_type, clinic_count, currency from published_prices
+    `select value::float8 as value, source_type, local_clinic_count, currency from published_prices
       where location_kind = $1 and location_id = $2 and service_code = $3 and tier = $4`,
     [kind, id, service, tier],
   );

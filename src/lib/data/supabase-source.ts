@@ -3,29 +3,18 @@ import type {
   LocationKind,
   LocationPricesResponse,
   PublicLocation,
-  PublicPrice,
   SubmitLeadResponse,
 } from "@/lib/contracts";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { normalizeEurRate, normalizePrice, normalizeService } from "./normalize";
 import { DataUnavailableError, type CalculatorDataSource } from "./types";
-
-/**
- * `get_location_prices` builds its JSON with jsonb_build_object, so numerics
- * arrive as JSON numbers — but a numeric that ever slips through as a string
- * ("8000.00") would make the engine concatenate instead of add. Coerce the
- * few numeric fields defensively.
- */
-const toNumber = (value: unknown): number => (typeof value === "number" ? value : Number(value));
-const toNullableNumber = (value: unknown): number | null => (value === null || value === undefined ? null : toNumber(value));
 
 export function normalizePricesResponse(raw: LocationPricesResponse): LocationPricesResponse {
   return {
     ...raw,
-    eur_rate: raw.eur_rate ? { rate: toNumber(raw.eur_rate.rate), date: String(raw.eur_rate.date) } : null,
-    services: (raw.services ?? []).map((s) => ({ ...s, sort: toNumber(s.sort) })),
-    prices: (raw.prices ?? []).map(
-      (p): PublicPrice => ({ ...p, value: toNumber(p.value), clinic_count: toNullableNumber(p.clinic_count) }),
-    ),
+    eur_rate: normalizeEurRate(raw.eur_rate),
+    services: (raw.services ?? []).map(normalizeService),
+    prices: (raw.prices ?? []).map(normalizePrice),
   };
 }
 

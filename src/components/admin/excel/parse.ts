@@ -1,5 +1,5 @@
 import type { ImportPayload, ImportPriceRow, Tier } from "@/lib/contracts";
-import { CARD_FIELDS, COLUMNS, DEFAULT_CURRENCIES, TIER_LABELS, norm, type CardKey, type ColumnKey } from "./columns";
+import { CARD_FIELDS, COLUMNS, DEFAULT_CURRENCIES, PRICE_SHEET, TIER_LABELS, norm, type CardKey, type ColumnKey } from "./columns";
 
 /** Raw spreadsheet cell as returned by read-excel-file. */
 export type RawCell = string | number | boolean | Date | null | undefined;
@@ -20,23 +20,19 @@ export interface ParseOptions {
 export interface ParsedCard {
   name: string;
   city_name: string;
+  region: string | null;
+  address: string | null;
+  contact_person: string | null;
   contacts: string | null;
   /** ISO date YYYY-MM-DD. */
   valid_from: string | null;
-  currency: string;
-  /** True when the clinic wrote "Так"/"Yes"/... in the confirmation cell. */
-  confirmed: boolean;
-}
-
-export interface ModerationCells {
-  status: string | null;
-  include_in_aggregate: boolean | null;
-  exclude_reason: string | null;
+  dental_tender: boolean;
+  public_profile_consent: boolean;
+  data_confirmed: boolean;
 }
 
 export interface ParsedRow {
   row: ImportPriceRow;
-  moderation: ModerationCells;
   errors: string[];
   warnings: string[];
 }
@@ -45,8 +41,11 @@ export interface ParsedTemplate {
   card: ParsedCard;
   cardErrors: string[];
   cardWarnings: string[];
+  /** Rows with a price — the ones that go to the import. */
   rows: ParsedRow[];
-  /** Structural problems (no header row, no rows, ...). Non-empty → nothing can be imported. */
+  /** Spreadsheet row numbers that have a service_code but no «Ціна від» (allowed, skipped). */
+  skippedEmpty: number[];
+  /** Structural problems (no header row, no priced rows, ...). Non-empty → nothing can be imported. */
   fileErrors: string[];
 }
 
@@ -70,6 +69,7 @@ export function parseNumber(cell: RawCell): { value: number | null; invalid: boo
   return { value: Number(cleaned), invalid: false };
 }
 
+/** Так/Ні cells. `null` = empty or unrecognised. */
 export function parseBool(cell: RawCell): boolean | null {
   if (typeof cell === "boolean") return cell;
   if (typeof cell === "number") return cell === 1 ? true : cell === 0 ? false : null;
@@ -136,7 +136,7 @@ const TIER_LOOKUP: Record<string, Tier> = (() => {
   return map;
 })();
 
-/** Ukrainian tier label (or code) → Tier. `undefined` = unrecognised, `null` = empty. */
+/** Tier code or Ukrainian label → Tier. `undefined` = unrecognised, `null` = empty. */
 export function parseTier(cell: RawCell): Tier | null | undefined {
   const s = text(cell)?.toLowerCase();
   if (!s) return null;
@@ -147,39 +147,48 @@ export function parseTier(cell: RawCell): Tier | null | undefined {
 
 const CARD_LOOKUP = new Map<string, CardKey>(CARD_FIELDS.map((f) => [norm(f.label), f.key]));
 CARD_LOOKUP.set("дата чинності", "valid_from");
-CARD_LOOKUP.set("валюта", "currency");
+CARD_LOOKUP.set("телефон", "contacts");
+CARD_LOOKUP.set("email", "contacts");
 
-const COLUMN_ALIASES: Record<string, ColumnKey> = (() => {
+const COLUMN_LOOKUP: Record<string, ColumnKey> = (() => {
   const map: Record<string, ColumnKey> = {};
   for (const c of COLUMNS) map[norm(c.header)] = c.key;
   map["service code"] = "service_code";
-  map["service_code"] = "service_code";
   map["код"] = "service_code";
-  map["що входить"] = "included_text";
   map["склад"] = "included_text";
-  map["бренд матеріал"] = "brand_material";
   return map;
 })();
 
 function emptyCard(): ParsedCard {
-  return { name: "", city_name: "", contacts: null, valid_from: null, currency: "UAH", confirmed: false };
+  return {
+    name: "",
+    city_name: "",
+    region: null,
+    address: null,
+    contact_person: null,
+    contacts: null,
+    valid_from: null,
+    dental_tender: false,
+    public_profile_consent: false,
+    data_confirmed: false,
+  };
 }
 
 export function parseTemplateSheet(sheet: RawSheet, options: ParseOptions = {}): ParsedTemplate {
   const currencies = (options.currencies ?? DEFAULT_CURRENCIES).map((c) => c.toUpperCase());
   const serviceByCode = new Map((options.services ?? []).map((s) => [s.service_code.toUpperCase(), s]));
-  const result: ParsedTemplate = { card: emptyCard(), cardErrors: [], cardWarnings: [], rows: [], fileErrors: [] };
+  const result: ParsedTemplate = { card: emptyCard(), cardErrors: [], cardWarnings: [], rows: [], skippedEmpty: [], fileErrors: [] };
 
-  // 1. header row
+  // 1. header row (service_code … Ціна від …)
   let headerIdx = -1;
   const colIndex = new Map<ColumnKey, number>();
   for (let r = 0; r < sheet.length; r += 1) {
     const found = new Map<ColumnKey, number>();
     (sheet[r] ?? []).forEach((cell, c) => {
-      const key = COLUMN_ALIASES[norm(cell)];
+      const key = COLUMN_LOOKUP[norm(cell)];
       if (key && !found.has(key)) found.set(key, c);
     });
-    if (found.has("offer_name") && found.has("price_from")) {
+    if (found.has("service_code") && found.has("price_from")) {
       headerIdx = r;
       found.forEach((v, k) => colIndex.set(k, v));
       break;
@@ -187,12 +196,12 @@ export function parseTemplateSheet(sheet: RawSheet, options: ParseOptions = {}):
   }
   if (headerIdx < 0) {
     result.fileErrors.push(
-      "Не знайдено рядок заголовків («Назва у прайсі», «Ціна від»). Використовуйте шаблон «DENVA шаблон цін клініки».",
+      "Не знайдено рядок заголовків («service_code», «Ціна від»). Використовуйте шаблон DENVA_shablon_tsin_kliniki.xlsx без зміни структури.",
     );
   }
 
-  // 2. clinic card — label / value pairs above the table
-  const cardEnd = headerIdx < 0 ? sheet.length : headerIdx;
+  // 2. clinic card — label in A, value in B, above the table
+  const cardEnd = headerIdx < 0 ? Math.min(sheet.length, 14) : headerIdx;
   const rawCard: Partial<Record<CardKey, RawCell>> = {};
   for (let r = 0; r < cardEnd; r += 1) {
     const row = sheet[r] ?? [];
@@ -202,47 +211,50 @@ export function parseTemplateSheet(sheet: RawSheet, options: ParseOptions = {}):
   const card = result.card;
   card.name = text(rawCard.name) ?? "";
   card.city_name = text(rawCard.city) ?? "";
+  card.region = text(rawCard.region);
+  card.address = text(rawCard.address);
+  card.contact_person = text(rawCard.contact_person);
   card.contacts = text(rawCard.contacts);
   if (!card.name) result.cardErrors.push("Не вказано назву клініки.");
   if (!card.city_name) result.cardErrors.push("Не вказано місто.");
   const validFrom = parseDate(rawCard.valid_from);
   if (validFrom === "invalid") result.cardErrors.push("Дата чинності прайсу має формат ДД.ММ.РРРР.");
   else card.valid_from = validFrom;
-  if (validFrom === null) result.cardWarnings.push("Не вказано дату чинності прайсу.");
-  const cardCurrency = normalizeCurrency(text(rawCard.currency));
-  if (cardCurrency && !currencies.includes(cardCurrency)) {
-    result.cardErrors.push(`Валюта «${cardCurrency}» не підтримується (${currencies.join(", ")}).`);
-  } else if (!cardCurrency) {
-    result.cardWarnings.push("Не вказано валюту прайсу — використано UAH.");
-  }
-  card.currency = cardCurrency && currencies.includes(cardCurrency) ? cardCurrency : "UAH";
-  card.confirmed = parseBool(rawCard.confirmation) === true;
-  if (!card.confirmed) result.cardWarnings.push("Клініка не підтвердила достовірність цін.");
+  if (validFrom === null) result.cardWarnings.push("Не вказано дату чинності прайсу — буде використано дату імпорту.");
+  if (!card.contacts) result.cardWarnings.push("Не вказано телефон або email клініки.");
+  card.dental_tender = parseBool(rawCard.dental_tender) === true;
+  card.public_profile_consent = parseBool(rawCard.public_profile_consent) === true;
+  card.data_confirmed = parseBool(rawCard.data_confirmed) === true;
+  if (!card.data_confirmed) result.cardWarnings.push("Клініка не підтвердила достовірність цін («Підтверджую достовірність» ≠ Так).");
 
   if (headerIdx < 0) return result;
 
-  // 3. rows
+  // 3. rows (spreadsheet row = index + 1, which is what the backend reports back)
   const seen = new Map<string, number>();
   const cellAt = (row: RawCell[], key: ColumnKey): RawCell => {
     const idx = colIndex.get(key);
     return idx === undefined ? null : row[idx];
   };
+  // "Середина діапазону" is computed by the DB — never read.
+  const dataKeys = [...colIndex.keys()].filter((k) => k !== "midpoint");
   for (let r = headerIdx + 1; r < sheet.length; r += 1) {
     const raw = sheet[r] ?? [];
-    const keys = [...colIndex.keys()];
-    if (keys.every((k) => text(cellAt(raw, k)) === null)) continue;
+    const rowNumber = r + 1;
+    const code = text(cellAt(raw, "service_code"))?.toUpperCase() ?? null;
+    const from = parseNumber(cellAt(raw, "price_from"));
+    const to = parseNumber(cellAt(raw, "price_to"));
+
+    // template rows come pre-filled with code / category / unit / tier: no price → allowed, skipped
+    if (from.value === null && !from.invalid && to.value === null && !to.invalid) {
+      if (dataKeys.some((k) => text(cellAt(raw, k)) !== null)) result.skippedEmpty.push(rowNumber);
+      continue;
+    }
 
     const errors: string[] = [];
     const warnings: string[] = [];
-    const rowNumber = r + 1;
 
-    const offerName = text(cellAt(raw, "offer_name"));
-    if (!offerName) errors.push("Не вказано назву у прайсі.");
-
-    const from = parseNumber(cellAt(raw, "price_from"));
-    const to = parseNumber(cellAt(raw, "price_to"));
     if (from.invalid) errors.push("«Ціна від» має бути числом.");
-    else if (from.value === null) errors.push("Не вказано «Ціна від».");
+    else if (from.value === null) errors.push("Вказано «Ціна до», але не вказано «Ціна від».");
     else if (from.value <= 0) errors.push("«Ціна від» має бути більшою за нуль.");
     if (to.invalid) errors.push("«Ціна до» має бути числом.");
     else if (to.value !== null && to.value <= 0) errors.push("«Ціна до» має бути більшою за нуль.");
@@ -250,89 +262,110 @@ export function parseTemplateSheet(sheet: RawSheet, options: ParseOptions = {}):
       errors.push("«Ціна до» не може бути меншою за «Ціна від».");
     }
 
-    const rowCurrency = normalizeCurrency(text(cellAt(raw, "currency"))) ?? card.currency;
+    const rowCurrency = normalizeCurrency(text(cellAt(raw, "currency"))) ?? "UAH";
     if (!currencies.includes(rowCurrency)) {
       errors.push(`Валюта «${rowCurrency}» не підтримується (${currencies.join(", ")}).`);
     }
 
     const tierRaw = parseTier(cellAt(raw, "tier"));
     if (tierRaw === undefined) {
-      errors.push(`Невідомий рівень «${text(cellAt(raw, "tier"))}». Допустимі: ${Object.values(TIER_LABELS).join(", ")}.`);
+      errors.push(`Невідомий рівень «${text(cellAt(raw, "tier"))}». Допустимі: common, minimum, classic, premium.`);
     }
     let tier: Tier | null = tierRaw ?? null;
 
-    let serviceCode = text(cellAt(raw, "service_code"))?.toUpperCase() ?? null;
-    if (serviceCode && !/^[A-Z][A-Z0-9_]*$/.test(serviceCode)) {
-      errors.push(`service_code «${serviceCode}» має містити лише латинські літери, цифри та «_».`);
-    } else if (serviceCode && options.services) {
-      const svc = serviceByCode.get(serviceCode);
-      if (!svc) warnings.push(`Невідомий service_code «${serviceCode}» — рядок не буде імпортовано і потрапить у протокол як невідомий код.`);
+    if (!code) {
+      warnings.push("Не вказано service_code — рядок потребує зіставлення модератором.");
+    } else if (!/^[A-Z][A-Z0-9_]*$/.test(code)) {
+      errors.push(`service_code «${code}» має містити лише латинські літери, цифри та «_».`);
+    } else if (options.services) {
+      const svc = serviceByCode.get(code);
+      if (!svc) warnings.push(`Невідомий service_code «${code}» — рядок не буде імпортовано і потрапить у протокол як невідомий код.`);
       else if (!svc.tiered && tier === null) tier = "common";
-      else if (!svc.tiered && tier !== "common") warnings.push("Для цієї послуги рівень має бути «Спільний».");
+      else if (!svc.tiered && tier !== "common") warnings.push("Для цієї послуги рівень має бути common.");
       else if (svc.tiered && (tier === null || tier === "common")) {
-        warnings.push("Для цієї послуги потрібен рівень: Мінімальний, Класичний або Преміальний.");
+        warnings.push("Для цієї послуги потрібен рівень: minimum, classic або premium.");
       }
     }
-    if (!serviceCode) serviceCode = null;
 
     const included = text(cellAt(raw, "included_text"));
-    if (!included) warnings.push("Не вказано склад: ціна без складу не допускається до агрегату.");
+    if (!included) warnings.push("Не вказано склад («Що входить»): ціна без складу не допускається до статистики.");
 
-    if (serviceCode && tier) {
-      const key = `${serviceCode}|${tier}`;
+    if (code && tier) {
+      const key = `${code}|${tier}`;
       const prev = seen.get(key);
       if (prev !== undefined) warnings.push(`Дубль рядка ${prev} (той самий код і рівень) — одна клініка має один голос.`);
       else seen.set(key, rowNumber);
     }
 
-    const includeCell = cellAt(raw, "include_in_aggregate");
-    const moderation: ModerationCells = {
-      status: text(cellAt(raw, "status")),
-      include_in_aggregate: parseBool(includeCell),
-      exclude_reason: text(cellAt(raw, "exclude_reason")),
-    };
+    const rowDate = parseDate(cellAt(raw, "valid_from"));
+    if (rowDate === "invalid") errors.push("«Дата чинності» має формат ДД.ММ.РРРР.");
 
     result.rows.push({
       row: {
         row_number: rowNumber,
-        offer_name: offerName ?? "",
-        brand_material: text(cellAt(raw, "brand_material")),
+        service_code: code,
+        category: text(cellAt(raw, "category")),
+        service_name: text(cellAt(raw, "service_name")),
+        unit: text(cellAt(raw, "unit")),
+        tier,
         price_from: from.value,
         price_to: to.value,
         currency: rowCurrency,
         included_text: included,
         exclusions: text(cellAt(raw, "exclusions")),
-        source: text(cellAt(raw, "source")),
-        service_code: serviceCode,
-        tier,
+        valid_from: rowDate === "invalid" ? null : (rowDate ?? card.valid_from),
+        note: text(cellAt(raw, "note")),
       },
-      moderation,
       errors,
       warnings,
     });
   }
-  if (result.rows.length === 0) result.fileErrors.push("У файлі немає жодного рядка з пропозицією.");
+  if (result.rows.length === 0) {
+    result.fileErrors.push("У файлі немає жодного рядка з ціною («Ціна від»). Порожні рядки дозволені, але імпортувати нічого.");
+  }
   return result;
 }
 
-/** Case/diacritic-insensitive city lookup by name or alias. */
-export function matchCity<T extends { id: string; name: string; aliases?: string[] | null }>(
+function blankRow(rowNumber: number): ImportPriceRow {
+  return {
+    row_number: rowNumber,
+    service_code: null,
+    category: null,
+    service_name: null,
+    unit: null,
+    tier: null,
+    price_from: null,
+    price_to: null,
+    currency: "UAH",
+    included_text: null,
+    exclusions: null,
+    valid_from: null,
+    note: null,
+  };
+}
+
+/** City candidates by name or alias; the region from the card narrows homonyms. */
+export function matchCities<T extends { id: string; name: string; aliases?: string[] | null; region_id?: string | null }>(
   name: string,
   cities: readonly T[],
-): T | null {
+  region?: { name: string | null; regions: ReadonlyArray<{ id: string; name: string }> },
+): T[] {
   const key = norm(name);
-  if (!key) return null;
-  return (
-    cities.find((c) => norm(c.name) === key) ??
-    cities.find((c) => (c.aliases ?? []).some((a) => norm(a) === key)) ??
-    null
-  );
+  if (!key) return [];
+  const byName = cities.filter((c) => norm(c.name) === key);
+  const candidates = byName.length ? byName : cities.filter((c) => (c.aliases ?? []).some((a) => norm(a) === key));
+  if (candidates.length > 1 && region?.name) {
+    const wanted = region.regions.filter((r) => norm(r.name) === norm(region.name) || norm(r.name).includes(norm(region.name)));
+    const narrowed = candidates.filter((c) => wanted.some((r) => r.id === c.region_id));
+    if (narrowed.length) return narrowed;
+  }
+  return candidates;
 }
 
 export interface PayloadInput {
   fileName: string;
   cityId: string;
-  /** Existing clinic or null to create a draft clinic from the card. */
+  /** Existing clinic or null → backend reuses by city + name or creates a draft. */
   clinicId: string | null;
   /** Rows to send; defaults to all rows without errors. */
   rows?: readonly ParsedRow[];
@@ -341,17 +374,25 @@ export interface PayloadInput {
 /** Builds the RPC payload; rows with client-side errors are never sent. */
 export function toImportPayload(parsed: ParsedTemplate, input: PayloadInput): ImportPayload {
   const rows = (input.rows ?? parsed.rows).filter((r) => r.errors.length === 0).map((r) => r.row);
+  // price-less template rows go along as blanks: the backend reports them in `skipped_empty`
+  const blanks = parsed.skippedEmpty.map(blankRow);
+  const c = parsed.card;
   return {
     file_name: input.fileName,
     clinic: {
       clinic_id: input.clinicId,
-      name: parsed.card.name,
+      name: c.name,
       city_id: input.cityId,
-      contacts: parsed.card.contacts,
-      valid_from: parsed.card.valid_from,
-      currency: parsed.card.currency,
+      region: c.region,
+      address: c.address,
+      contact_person: c.contact_person,
+      contacts: c.contacts,
+      valid_from: c.valid_from,
+      dental_tender: c.dental_tender,
+      public_profile_consent: c.public_profile_consent,
+      data_confirmed: c.data_confirmed,
     },
-    rows,
+    rows: [...rows, ...blanks].sort((a, b) => a.row_number - b.row_number),
   };
 }
 
@@ -362,13 +403,20 @@ export function clientRejected(parsed: ParsedTemplate): Array<{ row_number: numb
     .map((r) => ({ row_number: r.row.row_number, message: r.errors.join(" ") }));
 }
 
-/** Reads an .xlsx File/Blob/ArrayBuffer and parses the first price sheet. */
-export async function parseTemplateFile(
-  file: Blob | ArrayBuffer,
-  options: ParseOptions = {},
-): Promise<ParsedTemplate> {
+/** Reads an .xlsx File/Blob/ArrayBuffer and parses the «Прайс клініки» sheet. */
+export async function parseTemplateFile(file: Blob | ArrayBuffer, options: ParseOptions = {}): Promise<ParsedTemplate> {
   const { default: readExcelFile } = await import("read-excel-file/universal");
   const sheets = await readExcelFile(file);
-  const priceSheet = sheets.find((s) => norm(s.sheet) === norm("Прайс")) ?? sheets[0];
+  const priceSheet = sheets.find((s) => norm(s.sheet) === norm(PRICE_SHEET)) ?? sheets.find((s) => norm(s.sheet).startsWith("прайс"));
+  if (!priceSheet) {
+    return {
+      card: emptyCard(),
+      cardErrors: [],
+      cardWarnings: [],
+      rows: [],
+      skippedEmpty: [],
+      fileErrors: [`У файлі немає аркуша «${PRICE_SHEET}». Завантажте файл за шаблоном DENVA.`],
+    };
+  }
   return parseTemplateSheet(priceSheet.data as RawSheet, options);
 }

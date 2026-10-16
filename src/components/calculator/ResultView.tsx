@@ -1,50 +1,49 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { LeadIntent, LocationPricesResponse, PatientTier } from "@/lib/contracts";
-import {
-  ALL_ON_LABEL,
-  calculate,
-  calculatePresets,
-  createPriceBook,
-  deriveParams,
-  isArchLike,
-  jawsOf,
-  listAddons,
-  scenarioLabel,
-  type AllOn,
-  type Answers,
-  type Params,
-  type Tiers,
-} from "@/engine/v2";
+import { useEffect, useMemo, useRef } from "react";
+import type { Jaw, JawCalculation, JawInput, LeadIntent, LocationPricesResponse, PatientTier } from "@/lib/contracts";
+import { createPriceBook, sourceSentence, type PriceBook } from "@/engine/v3";
+import { formatDateUk, formatRate, type Currency } from "@/engine/v3/format";
 import { getDataSource } from "@/lib/data";
 import { buildLeadPayload } from "@/services/lead";
 import { track } from "@/services/analytics";
-import { AddonsBlock } from "./AddonsBlock";
+import { AdditionalServices } from "./AdditionalServices";
+import { JawBlock } from "./JawBlock";
 import { LeadBlock } from "./LeadBlock";
+import {
+  JAWS,
+  UNKNOWN_LABEL,
+  deriveInputs,
+  jawAvailable,
+  leadParts,
+  presetJaw,
+  quoteFor,
+  setAnswer,
+  setCountKeepingOne,
+  setScenario,
+  setTiers,
+  setUnknownChoice,
+  leaveUnknownMode,
+  type CalcState,
+} from "./model";
+import { Money, NO_DATA } from "./Money";
 import { ParamsPanel } from "./ParamsPanel";
 import { StepHeading } from "./StepHeading";
-import { TierCards } from "./TierCards";
 import { UnavailableState } from "./UnavailableState";
-import { eurText, uahText } from "./money";
-import type { LoadState, Loadable } from "./useCalculatorData";
-import { useEffect } from "react";
-
-export interface ChosenLocation {
-  kind: "city" | "region";
-  id: string;
-  name: string;
-}
+import type { LoadState } from "./useCalculatorData";
+import type { ChosenLocation } from "./storage";
 
 interface Props {
   location: ChosenLocation;
-  answers: Answers;
   prices: LoadState<LocationPricesResponse>;
+  state: CalcState;
+  update: (fn: (state: CalcState) => CalcState) => void;
+  onRestart: () => void;
 }
 
-export function ResultView({ location, answers, prices }: Props) {
-  const state: Loadable<LocationPricesResponse> = prices.state;
-  if (state.status === "loading") {
+export function ResultView({ location, prices, state, update, onRestart }: Props) {
+  const loaded = prices.state;
+  if (loaded.status === "loading") {
     return (
       <div role="status" aria-live="polite" className="space-y-3" data-testid="result-loading">
         <p className="text-[17px] font-extrabold">Рахуємо вартість для {location.name}…</p>
@@ -54,244 +53,276 @@ export function ResultView({ location, answers, prices }: Props) {
       </div>
     );
   }
-  if (state.status === "error") {
-    return <UnavailableState unavailable={state.unavailable} onRetry={prices.retry} />;
-  }
-  const initial = deriveParams(answers);
-  if (!initial) return null;
-  return <ResultBody response={state.data} answers={answers} location={location} initialParams={initial} />;
+  if (loaded.status === "error") return <UnavailableState unavailable={loaded.unavailable} onRetry={prices.retry} />;
+  return <ResultBody response={loaded.data} location={location} state={state} update={update} onRestart={onRestart} />;
 }
+
+const submitLead = async (body: Parameters<Awaited<ReturnType<typeof getDataSource>>["submitLead"]>[0]) =>
+  (await getDataSource()).submitLead(body);
 
 function ResultBody({
   response,
-  answers,
   location,
-  initialParams,
+  state,
+  update,
+  onRestart,
 }: {
   response: LocationPricesResponse;
-  answers: Answers;
   location: ChosenLocation;
-  initialParams: Params;
+  state: CalcState;
+  update: Props["update"];
+  onRestart: () => void;
 }) {
   const book = useMemo(() => createPriceBook(response), [response]);
-  const [params, setParams] = useState<Params>(initialParams);
-  const [tiers, setTiers] = useState<Tiers>({ implant: "classic", crown: "classic" });
-  const [selected, setSelected] = useState<PatientTier>("classic");
+  const inputs = useMemo(() => deriveInputs(state), [state]);
+  const quote = useMemo(() => quoteFor(state, book), [state, book]);
+  const currency: Currency = state.currency;
+  const eurRate = book.eurRate;
 
-  const current = useMemo(() => calculate(book, params, tiers), [book, params, tiers]);
-  const presets = useMemo(() => calculatePresets(book, params), [book, params]);
-  const addons = useMemo(() => listAddons(book, params), [book, params]);
-  const arch = isArchLike(current.kind);
+  const calcs: Record<Jaw, JawCalculation | null> = { upper: quote.upperJawCalculation, lower: quote.lowerJawCalculation };
+  const jawInputs: Record<Jaw, JawInput | null> = { upper: inputs.upper, lower: inputs.lower };
+  const activeJaws = JAWS.filter((j) => calcs[j] !== null);
+  const meta = quote.priceMeta;
+  const hasData = quote.overallTotal !== null;
 
+  const viewed = useRef(false);
   useEffect(() => {
-    track("result_viewed", {
-      location_id: location.id,
-      scenario: scenarioLabel(initialParams),
-      has_data: current.main !== null,
-    });
-    // Once per result screen.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (viewed.current) return;
+    viewed.current = true;
+    track("result_viewed", { location_id: location.id, has_data: hasData });
+    if (hasData) track("calculation_completed", { location_id: location.id, jaws: activeJaws.length });
+  }, [location.id, hasData, activeJaws.length]);
+
+  const rangeFrom = (jaw: Jaw) => inputs.rangeFromTeeth[jaw];
 
   const buildLead = (intent: LeadIntent, phone: string) =>
     buildLeadPayload({
       intent,
       phone,
       location,
-      answers,
-      params,
-      calculation: current,
-      implantTier: tiers.implant,
-      crownTier: tiers.crown,
+      parts: leadParts(state, book),
       pageUrl: window.location.href,
       search: window.location.search,
     });
 
-  const submit = async (body: Parameters<Awaited<ReturnType<typeof getDataSource>>["submitLead"]>[0]) =>
-    (await getDataSource()).submitLead(body);
-
-  const changeParams = (next: Params) => {
-    setParams(next);
-    track("params_changed", { scenario: scenarioLabel(next) });
-  };
-
-  const selectCard = (tier: PatientTier) => {
-    setSelected(tier);
-    setTiers({ implant: tier, crown: tier });
-    track("tier_card_selected", { tier });
-  };
-
-  const changeTiers = (next: Tiers, which: "implant" | "crown") => {
-    setTiers(next);
-    track("tier_toggled", { which, tier: next[which] });
-  };
-
-  const changeAllOn = (allOn: AllOn) => {
-    setParams((p) => ({ ...p, allOn }));
-    track("all_on_selected", { all_on: allOn });
+  const preset = (jaw: Jaw, tier: PatientTier): JawCalculation | null => {
+    const input = jawInputs[jaw];
+    return input ? presetJaw(input, tier, book, rangeFrom(jaw)) : null;
   };
 
   return (
     <div className="space-y-5">
       <div>
-        <StepHeading>
-          {current.kind === "reference" ? "Довідкова ціна одного зуба" : "Орієнтовна вартість імплантації"}
-        </StepHeading>
+        <StepHeading>Орієнтовна вартість імплантації</StepHeading>
         <p className="mt-1.5 text-[15px] text-ink-soft">
           Середня ринкова ціна для: <span className="font-bold text-ink">{response.location.name}</span>
         </p>
       </div>
 
-      {current.kind === "reference" && (
-        <Notice>
-          Ви не знаєте точно, що потрібно, тому ми показуємо довідкову ціну одного зуба. Уточніть обсяг у
-          параметрах нижче — сума одразу перерахується.
-        </Notice>
-      )}
-      {params.approx === "several" && (
-        <Notice>
-          Ви вказали «кілька» зубів, тому ми взяли 3 зуби без уточнення розташування. Змініть кількість у
-          параметрах — сума одразу перерахується.
-        </Notice>
-      )}
-
-      <ParamsPanel params={params} onChange={changeParams} />
-
-      {arch ? (
-        <ArchSection
-          params={params}
-          onAllOn={changeAllOn}
-          segmentNote={current.kind === "seven_plus"}
-          segment={current.segment}
-          eurRate={book.eurRate}
+      {state.unknown.active && state.unknown.choice && (
+        <p
+          className="rounded-2xl border border-brand-line bg-brand-soft p-4 text-sm leading-relaxed text-ink-soft"
+          data-testid="unknown-note"
         >
-          <TierCards
-            params={params}
-            tiers={tiers}
-            selected={selected}
-            current={current}
-            presets={presets}
-            eurRate={book.eurRate}
-            onSelectCard={selectCard}
-            onTiers={changeTiers}
-          />
-        </ArchSection>
-      ) : (
-        <TierCards
-          params={params}
-          tiers={tiers}
-          selected={selected}
-          current={current}
-          presets={presets}
-          eurRate={book.eurRate}
-          onSelectCard={selectCard}
-          onTiers={changeTiers}
-        />
+          Ви не знаєте точно, тому ми показуємо орієнтир: «{UNKNOWN_LABEL[state.unknown.choice]}». Уточніть у параметрах
+          нижче — сума одразу перерахується.
+        </p>
       )}
 
-      <AddonsBlock items={addons} teethPresent={params.teethPresent} />
+      <ParamsPanel
+        state={state}
+        inputs={inputs}
+        onCount={(jaw, n) => {
+          update((s) => setCountKeepingOne(s, jaw, n));
+          track("params_changed", { what: "count", jaw, value: n });
+        }}
+        onLocation={(jaw, value) => update((s) => setAnswer(s, jaw, { location: value }))}
+        onStatus={(jaw, value) => update((s) => setAnswer(s, jaw, { status: value }))}
+        onInstalled={(jaw, value) => update((s) => setAnswer(s, jaw, { installed: value }))}
+        onUnknownChoice={(choice) => update((s) => setUnknownChoice(s, choice))}
+        onLeaveUnknown={() => update((s) => leaveUnknownMode(s))}
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <CurrencyToggle
+          value={currency}
+          disabled={!eurRate}
+          onChange={(c) => {
+            update((s) => ({ ...s, currency: c }));
+            track("currency_changed", { currency: c });
+          }}
+        />
+        <label
+          className="flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl border border-line bg-paper px-4 py-2.5 text-left"
+          data-testid="temp-toggle"
+        >
+          <input
+            type="checkbox"
+            checked={state.includeTemporary}
+            onChange={(event) => {
+              update((s) => ({ ...s, includeTemporary: event.target.checked }));
+              track("temporary_toggled", { on: event.target.checked });
+            }}
+            className="size-5 shrink-0 accent-[var(--color-brand)]"
+          />
+          <span className="text-sm leading-snug font-bold">Врахувати можливе тимчасове протезування</span>
+        </label>
+      </div>
+
+      {activeJaws.map((jaw) => {
+        const input = jawInputs[jaw];
+        const calc = calcs[jaw];
+        if (!input || !calc) return null;
+        return (
+          <JawBlock
+            key={jaw}
+            jaw={jaw}
+            input={input}
+            calc={calc}
+            minCalc={jawAvailable(calc) ? preset(jaw, "minimum") : null}
+            premCalc={jawAvailable(calc) ? preset(jaw, "premium") : null}
+            tiers={state.tiers[jaw]}
+            book={book}
+            currency={currency}
+            onTiers={(patch, which) => {
+              update((s) => setTiers(s, jaw, patch));
+              track("tier_toggled", { jaw, which, tier: Object.values(patch)[0] });
+            }}
+            onPreset={(tier) => {
+              update((s) => setTiers(s, jaw, { implant: tier, crown: tier }));
+              track("tier_preset_applied", { jaw, tier });
+            }}
+            onScenario={(scenario) => {
+              update((s) => setScenario(s, jaw, scenario));
+              track("scenario_selected", { jaw, scenario });
+            }}
+          />
+        );
+      })}
+
+      <OverallBlock
+        total={quote.overallTotal}
+        currency={currency}
+        eurRate={eurRate}
+        twoJaws={activeJaws.length === 2}
+        anyAllOn={activeJaws.some((j) => ["aox4", "aox6", "aox8"].includes(calcs[j]?.scenario ?? ""))}
+      />
+
+      {hasData && <SourceBlock meta={meta} book={book} />}
+
+      <AdditionalServices book={book} state={state} currency={currency} />
 
       <p className="rounded-2xl bg-canvas p-4 text-sm leading-relaxed text-ink-soft" data-testid="disclaimer">
-        Остаточну схему лікування та ціну визначають після консультації лікаря та КТ. Розрахунок орієнтовний і не
-        є діагнозом чи планом лікування.
+        Остаточну схему лікування та ціну визначають після консультації лікаря та КТ. Розрахунок орієнтовний і не є
+        діагнозом чи планом лікування.
       </p>
 
-      <LeadBlock buildLead={buildLead} submit={submit} />
+      <LeadBlock buildLead={buildLead} submit={submitLead} />
+
+      <button
+        type="button"
+        onClick={onRestart}
+        className="min-h-10 text-sm font-bold text-ink-soft underline-offset-4 hover:text-brand hover:underline"
+        data-testid="restart"
+      >
+        Почати розрахунок заново
+      </button>
     </div>
   );
 }
 
-function Notice({ children }: { children: React.ReactNode }) {
+function CurrencyToggle({ value, disabled, onChange }: { value: Currency; disabled: boolean; onChange: (c: Currency) => void }) {
   return (
-    <p className="rounded-2xl border border-brand-line bg-brand-soft p-4 text-sm leading-relaxed text-ink-soft">
-      {children}
-    </p>
+    <div role="group" aria-label="Валюта" className="grid grid-cols-2 gap-1 rounded-full border border-line bg-paper p-1" data-testid="currency-toggle">
+      {(
+        [
+          ["UAH", "₴", "Гривня"],
+          ["EUR", "€", "Євро"],
+        ] as const
+      ).map(([id, symbol, name]) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={value === id}
+          aria-label={name}
+          disabled={disabled && id === "EUR"}
+          onClick={() => onChange(id)}
+          className={`min-h-10 rounded-full text-[15px] font-extrabold transition-colors disabled:opacity-40 ${
+            value === id ? "bg-brand text-white" : "text-ink-soft hover:bg-canvas"
+          }`}
+        >
+          {symbol}
+        </button>
+      ))}
+    </div>
   );
 }
 
-const ALL_ON: AllOn[] = [4, 6, 8];
-
-/** ТЗ §6.2: All-on-4 / 6 / 8 tabs; none is presented as medically recommended. */
-function ArchSection({
-  params,
-  onAllOn,
-  segmentNote,
-  segment,
+function OverallBlock({
+  total,
+  currency,
   eurRate,
-  children,
+  twoJaws,
+  anyAllOn,
 }: {
-  params: Params;
-  onAllOn: (n: AllOn) => void;
-  segmentNote: boolean;
-  segment: ReturnType<typeof calculate>["segment"];
+  total: ReturnType<typeof quoteFor>["overallTotal"];
+  currency: Currency;
   eurRate: { rate: number } | null;
-  children: React.ReactNode;
+  twoJaws: boolean;
+  anyAllOn: boolean;
 }) {
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    const index = ALL_ON.indexOf(params.allOn);
-    const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (delta === 0) return;
-    event.preventDefault();
-    const next = ALL_ON[(index + delta + ALL_ON.length) % ALL_ON.length];
-    onAllOn(next);
-    document.getElementById(`allon-tab-${next}`)?.focus();
-  };
-
   return (
-    <section aria-label="Варіанти All-on" className="space-y-3">
-      {segmentNote && (
-        <Notice>
-          <span data-testid="segment-note">
-            Для 7 і більше зубів лікар може запропонувати як All-on, так і сегментний міст на кількох імплантах —
-            схему визначає лікар після огляду та КТ. Нижче — орієнтири для варіантів All-on.
-          </span>
-        </Notice>
-      )}
-      {segment && (
-        <div className="rounded-2xl border border-line bg-paper p-4 text-sm">
-          <p className="font-extrabold">{segment.label}</p>
-          <p className="tabular mt-1 font-bold">
-            {uahText(segment.main)} {eurText(segment.main, eurRate)}
-          </p>
-        </div>
-      )}
-      <div
-        role="tablist"
-        aria-label="Кількість імплантів на щелепі"
-        className="grid grid-cols-3 gap-1 rounded-full bg-line/60 p-1"
-        onKeyDown={onKeyDown}
-      >
-        {ALL_ON.map((n) => {
-          const active = params.allOn === n;
-          return (
-            <button
-              key={n}
-              id={`allon-tab-${n}`}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-controls="allon-panel"
-              tabIndex={active ? 0 : -1}
-              onClick={() => onAllOn(n)}
-              className={`min-h-11 rounded-full text-[15px] font-extrabold transition-colors ${
-                active ? "bg-paper text-brand shadow-sm" : "text-ink-soft hover:text-brand"
-              }`}
-            >
-              {ALL_ON_LABEL(n)}
-            </button>
-          );
-        })}
+    <section
+      aria-labelledby="overall-title"
+      data-testid="overall"
+      className="rounded-[var(--radius-card)] border-2 border-brand bg-paper p-5"
+    >
+      <h2 id="overall-title" className="text-[18px] font-extrabold">
+        Загальна орієнтовна вартість
+      </h2>
+      <div className="mt-2">
+        <Money range={total} currency={currency} eurRate={eurRate} mainClass="text-[30px] font-extrabold text-brand" testId="overall-main" />
       </div>
-      <p className="text-xs leading-relaxed text-muted">
-        {jawsOf(params) === 2
-          ? "Для двох щелеп імпланти, мультиюніти та постійні конструкції рахуються вдвічі; сканування — один раз на етап. "
-          : ""}
-        Кількість імплантів остаточно визначає лікар після огляду та КТ: жоден із варіантів не є медичною
-        рекомендацією, це орієнтири для порівняння.
+      {total && anyAllOn && (
+        <p className="mt-1 text-xs text-muted">Для All-on — повний бюджет двох етапів.</p>
+      )}
+      {!total && <p className="mt-1 text-sm text-ink-soft">{NO_DATA} для цього розрахунку — суму ми не вигадуємо.</p>}
+      {twoJaws && (
+        <p className="mt-3 text-sm leading-relaxed text-ink-soft" data-testid="two-jaws-note">
+          Точну спільну схему уточнить клініка. Загальна сума — проста сума двох щелеп, кожна зі своїм скануванням.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function SourceBlock({ meta, book }: { meta: ReturnType<typeof quoteFor>["priceMeta"]; book: PriceBook }) {
+  const date = meta.calculated_at ? formatDateUk(meta.calculated_at) : null;
+  return (
+    <section className="rounded-2xl bg-canvas p-4 text-sm leading-relaxed" data-testid="source-note" aria-label="Джерело цін">
+      <p>
+        <span className="font-bold">Джерело цін: </span>
+        <span data-testid="source-sentence">{sourceSentence(meta)}</span>
       </p>
-      <div id="allon-panel" role="tabpanel" aria-labelledby={`allon-tab-${params.allOn}`}>
-        {children}
-      </div>
+      <p className="mt-1 text-muted">
+        <span data-testid="source-city">{book.locationName}</span>
+        {date && (
+          <>
+            {" · ціни станом на "}
+            <span data-testid="source-date">{date}</span>
+          </>
+        )}{" "}
+        {meta.is_demo && (
+          <span className="inline-flex rounded-full bg-warn-soft px-2 py-0.5 text-xs font-bold text-warn" data-testid="demo-badge">
+            демо-дані
+          </span>
+        )}
+      </p>
+      {meta.eur_rate && (
+        <p className="mt-1 text-xs text-muted" data-testid="eur-rate">
+          Еквівалент у євро — за курсом НБУ {formatRate(meta.eur_rate.rate)} грн за 1&nbsp;€ на {formatDateUk(meta.eur_rate.date)}.
+        </p>
+      )}
     </section>
   );
 }

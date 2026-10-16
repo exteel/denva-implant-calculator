@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { saveClinicPrice, type AdminClinicPrice, type Clinic, type ClinicPrice, type Service } from "./api";
 import {
   CURRENCIES,
+  compositionRequired,
   PATIENT_TIER_LIST,
   TIER_LABEL,
   describeError,
@@ -165,7 +166,7 @@ export function PriceFormDialog({
 
         <TextAreaField
           label="Що входить у ціну"
-          required={service ? service.role !== "addon" : true}
+          required={service ? compositionRequired(service.role) : true}
           value={values.included_text}
           error={errors.included_text}
           hint={service?.included_text ? `Еталонний склад: ${service.included_text}` : "Обов'язково: ціна без складу не допускається до агрегату"}
